@@ -18,10 +18,9 @@ from aiida.common.constants import bohr_to_ang, timeau_to_sec
 
 from aiida.parsers.exceptions import OutputParsingError
 
-from basicpw import BasicpwParser
-from basic_raw_parser_pw  import convert_qe_time_to_sec
-
-from pw_warnings import get_warnings
+from aiida.parsers.plugins.quantumespresso.basicpw import BasicpwParser
+from aiida.parsers.plugins.quantumespresso.basic_raw_parser_pw  import convert_qe_time_to_sec
+#~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 import os, numpy as np, re
 
 
@@ -147,7 +146,7 @@ class FlipperParser(BasicpwParser):
 
         with open(out_file) as f:
             txt = f.read()
-            warnings, fatality = get_warnings(txt)
+            #~ warnings, fatality = get_warnings(txt)
 
 
             match = TIME_USED_REGEX.search(txt)
@@ -178,7 +177,7 @@ class FlipperParser(BasicpwParser):
 
         output_params = ParameterData(
             dict = dict(
-                warnings=warnings,
+                #~ warnings=warnings,
                 cputime=cputime,
                 walltime=walltime,
                 nstep=nstep

@@ -1,6 +1,6 @@
 import os
 
-from pw import PwCalculation
+from aiida.orm.calculation.job.quantumespresso.pw import PwCalculation
 from aiida.orm.calculation.job.quantumespresso import (
         get_input_data_text, _lowercase_dict, _uppercase_dict
     )
