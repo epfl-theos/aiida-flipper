@@ -338,8 +338,10 @@ class FlipperParser(BasicpwParser):
         cells = np.array([in_struc.cell] * nstep)
         symbols = np.array([str(i.kind_name) for i in in_struc.sites[:nat]])
 
-
-
+        # Transforming bohr to angstrom, because this is mostly what's being used in AiiDA.
+        # For now, I will not transform the velocities, because there's no real concept for them in AiiDA.
+        # Maybe in the future, we should have Angstrom/fs ?
+        positions *= bohr_to_ang
 
         trajectory_data.set_trajectory(
             stepids=stepids,
@@ -360,7 +362,10 @@ class FlipperParser(BasicpwParser):
         if temperature_thermostat is not None:
             trajectory_data._set_attr('temperature_thermostat', temperature_thermostat)
 
-        trajectory_data._set_attr('units|positions','atomic')
+        # Old: positions were stored in atomic coordinates, made conversions a bit messy,
+        # and makes it hard to use some functions that suppose angstroms as units
+        # trajectory_data._set_attr('units|positions','atomic')
+        trajectory_data._set_attr('units|positions','angstrom')
         trajectory_data._set_attr('units|cells','angstrom')
         trajectory_data._set_attr('units|velocities','atomic')
 
