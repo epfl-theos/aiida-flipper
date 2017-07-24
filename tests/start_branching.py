@@ -20,13 +20,13 @@ def start_run():
     parameters_nvt = ParameterData(dict=deepcopy(parameter_d))
     parameter_d['IONS']['ion_temperature'] = 'not_controlled'
     parameters_nve=ParameterData(dict=deepcopy(parameter_d))
-    moldyn_parameters_thermalize=ParameterData(dict={'nstep':3, 'max_steps_percalc':7, 'resources':{'num_machines':1}, 'max_wallclock_seconds':1000})
-    moldyn_parameters_nvt=ParameterData(dict={'nstep':10, 'max_steps_percalc':7, 'resources':{'num_machines':1}, 'max_wallclock_seconds':1000})
-    moldyn_parameters_nve=ParameterData(dict={'nstep':2, 'max_steps_percalc':7, 'resources':{'num_machines':1}, 'max_wallclock_seconds':1000})
+    moldyn_parameters_thermalize=ParameterData(dict={'nstep':10, 'max_steps_percalc':50, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
+    moldyn_parameters_nvt=ParameterData(dict={'nstep':100, 'max_steps_percalc':60, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
+    moldyn_parameters_nve=ParameterData(dict={'nstep':20, 'max_steps_percalc':50, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
     code = Code.get_from_string('flipper')
     bc = BranchingCalculation(
             structure=structure,pseudo_Si=pseudo_Si, kpoints=kpoints, # The generic stuff
-            parameters_branching=ParameterData(dict=dict(nr_of_branches=2)), # branching etc!
+            parameters_branching=ParameterData(dict=dict(nr_of_branches=16)), # branching etc!
             code=code,
             parameters_thermalize=parameters_thermalize, parameters_nvt=parameters_nvt, parameters_nve=parameters_nve,
             moldyn_parameters_thermalize=moldyn_parameters_thermalize, moldyn_parameters_nvt=moldyn_parameters_nvt, moldyn_parameters_nve=moldyn_parameters_nve,

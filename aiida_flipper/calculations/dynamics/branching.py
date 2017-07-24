@@ -45,7 +45,6 @@ class BranchingCalculation(ChillstepCalculation):
         inp_d = {k:v for k,v in self.get_inputs_dict().items() if not 'parameters_' in k}
         inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_nvt
         inp_d['parameters'] = self.inp.parameters_nvt
-        
 
         traj = self.out.thermalizer.out.total_trajectory
 
@@ -55,12 +54,11 @@ class BranchingCalculation(ChillstepCalculation):
                         create_settings=True,
                         complete_missing=True)),
                 structure=self.inp.structure)
+
         try:
             kwargs['settings'] = self.inp.settings
         except:
             pass # settings will be None
-        
-
 
         inlinec, res = get_structure_from_trajectory_inline(**kwargs)
         inp_d['settings']=res['settings']
@@ -96,8 +94,8 @@ class BranchingCalculation(ChillstepCalculation):
             inlinec, res = get_structure_from_trajectory_inline(**kwargs)
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']
-            slaves['slave_NVE_{}'.format(str(count).rjust(len(str(len(indices))),str(0)))] = ReplayCalculation(**inp_d)
-            slaves['get_step_{}'.format(idx)] = inlinec
+            slaves['slave_NVE_{}'.format(str(count).rjust(len(str(len(indices))),str(0)))]  = ReplayCalculation(**inp_d)
+            slaves['get_step_{}'.format(str(idx).rjust(len(str(len(indices[-1]))),str(0)))] = inlinec
         self.goto(self.collect_trajectories)
         return slaves
 
@@ -117,8 +115,4 @@ class BranchingCalculation(ChillstepCalculation):
         qb.append(ReplayCalculation, output_of='b', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'slave_NVE_%'}}, tag='c', edge_tag='mb', project='*')
         d = {item['mb']['label']:item['c']['*'].get_output_trajectory() for item in qb.iterdict()}
         return zip(*sorted(d.items()))[1]
-
-
-        
-        
 

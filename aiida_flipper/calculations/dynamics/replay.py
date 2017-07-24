@@ -39,6 +39,7 @@ class ReplayCalculation(ChillstepCalculation):
     def run_calculation(self):
         # create a calculation:
         calc = self.inp.code.new_calc()
+        max_wallclock_seconds = self.inputs.moldyn_parameters.dict.max_wallclock_seconds
         for linkname, input_node in self.get_inputs_dict().iteritems():
             if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
                 continue
@@ -46,9 +47,10 @@ class ReplayCalculation(ChillstepCalculation):
                 calc.add_link_from(input_node, label=linkname)
         input_dict = self.inp.parameters.get_dict()
         input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
+        input_dict['CONTROL']['max_seconds'] = max_wallclock_seconds - 180 # Give the code 3 minnutes to terminate gracefully
         # set the resources:
         calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
-        calc.set_max_wallclock_seconds(self.inputs.moldyn_parameters.dict.max_wallclock_seconds)
+        calc.set_max_wallclock_seconds(max_wallclock_seconds)
 
         # Now, if I am restarting from a previous calculation, I will use the inline calculation
         # to give me a new structure and new settings!

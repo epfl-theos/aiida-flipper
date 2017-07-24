@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-from aiida.orm.calculation.job.quantumespresso.pw import PwCalculation
-from aiida.parsers.plugins.quantumespresso.basic_raw_parser_pw import (
-    parse_raw_output, QEOutputParsingError)
+
+from aiida.orm import CalculationFactory
+PwCalculation = CalculationFactory("quantumespresso.pw")
+from aiida_quantumespresso.parsers.basicpw import BasicpwParser
+from aiida_quantumespresso.parsers.basic_raw_parser_pw  import convert_qe_time_to_sec
+
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.folder import FolderData
 from aiida.parsers.parser import Parser  # , ParserParamManager
-from aiida.parsers.plugins.quantumespresso import convert_qe2aiida_structure
+
 from aiida.common.datastructures import calc_states
 from aiida.common.exceptions import UniquenessError
 from aiida.orm.data.array import ArrayData
@@ -18,8 +21,6 @@ from aiida.common.constants import bohr_to_ang, timeau_to_sec
 
 from aiida.parsers.exceptions import OutputParsingError
 
-from aiida.parsers.plugins.quantumespresso.basicpw import BasicpwParser
-from aiida.parsers.plugins.quantumespresso.basic_raw_parser_pw  import convert_qe_time_to_sec
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 import os, numpy as np, re
 

@@ -1,9 +1,9 @@
 import os
 
-from aiida.orm.calculation.job.quantumespresso.pw import PwCalculation
-from aiida.orm.calculation.job.quantumespresso import (
-        get_input_data_text, _lowercase_dict, _uppercase_dict
-    )
+from aiida.orm import CalculationFactory
+PwCalculation = CalculationFactory("quantumespresso.pw")
+from aiida_quantumespresso.calculations import get_input_data_text, _lowercase_dict, _uppercase_dict
+
 
 from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.kpoints import KpointsData
