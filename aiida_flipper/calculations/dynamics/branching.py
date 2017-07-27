@@ -92,7 +92,7 @@ class BranchingCalculation(ChillstepCalculation):
 
             kwargs = dict(trajectory=traj, parameters=ParameterData(dict=dict(
                             step_index=-1,
-                            recenter=self.parameters_branching.dict.recenter_before_nvt,
+                            recenter=self.inputs.parameters_branching.dict.recenter_before_nvt,
                             create_settings=True,
                             complete_missing=True)),
                     structure=self.inp.structure)
