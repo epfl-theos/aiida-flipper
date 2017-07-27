@@ -94,8 +94,10 @@ class FlipperCalculation(PwCalculation):
                         raise InputValidationError("Pseudo for kind {} passed "
                                                    "more than one time".format(kind))
                     pseudos[kind] = the_pseudo
-
-        parent_calc_folder = inputdict.pop(self.get_linkname('parent_folder'), None)
+        #~ print self.get_linkname('parent_folder'), '!!!!!!!!!!!!!'
+        # There is a problem here, I have remote_folder in the link name
+        #~ parent_calc_folder = inputdict.pop(self.get_linkname('parent_folder'), None)
+        parent_calc_folder = inputdict.pop('remote_folder', None)
         if parent_calc_folder is not None:
             if not isinstance(parent_calc_folder, RemoteData):
                 raise InputValidationError("parent_calc_folder, if specified, "

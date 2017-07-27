@@ -1,5 +1,6 @@
 from aiida.orm.calculation.inline import optional_inline, make_inline
 from aiida.orm.data.structure import StructureData
+from aiida.orm.data.array import ArrayData
 from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.data.parameter import ParameterData
 
@@ -127,3 +128,74 @@ def concatenate_trajectory_inline(**kwargs):
             traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
     [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
     return {'concatenated_trajectory':traj}
+
+
+@make_inline 
+def get_diffusion_from_msd_inline(**kwargs):
+    return get_diffusion_from_msd(**kwargs)
+
+def get_diffusion_from_msd(structure, parameters, **trajectories):
+
+    from aiida.common.constants import timeau_to_sec
+    from mdtools.libs.mdlib.trajectory_analysis import TrajectoryAnalyzer
+
+    parameters_d = parameters.get_dict()
+    trajdata_list = trajectories.values()
+
+    ####################### CHECKS ####################
+    units_set = set()
+    timesteps_set = set()
+    units_set = set()
+    vel_units_set = set()
+
+    for t in trajdata_list:
+        input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
+        # get the timestep on the fly
+        timesteps_set.add(input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1))
+        units_set.add(t.get_attr('units|positions'))
+        vel_units_set.add(t.get_attr('units|velocities'))
+    # Checking if everything is consistent, 
+    # Check same units:
+    units_positions = units_set.pop()
+    if units_set:
+        raise Exception("Incommensurate units")
+    units_velocities = vel_units_set.pop()
+    if vel_units_set:
+        raise Exception("Incommensurate units")
+    # legacy:
+    if units_velocities == 'atomic':
+        units_velocities = 'pw'
+    # Same timestep is mandatory!
+    timestep = timesteps_set.pop()
+    if timesteps_set:
+        timesteps_set.add(timestep)
+        raise Exception("Multiple timesteps {}".format(timesteps_set))
+
+    # I work with fs, not QE units!
+    timestep_fs = timestep*timeau_to_sec*2*1e15
+    equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
+
+    trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
+    ta = TrajectoryAnalyzer(verbosity=0)
+    species_of_interest = parameters_d.pop('species_of_interest', None)
+    ta.set_structure(structure, species_of_interest=species_of_interest)
+    ta.set_trajectories(
+            trajectories, # velocities=velocities if plot else None,
+            pos_units=units_positions, # vel_units=units_velocities,
+            timestep_in_fs=timestep_fs, recenter=parameters_d.pop('recenter', False))
+    print parameters
+    res, arr = ta.get_msd(**parameters_d)
+    arr_data = ArrayData()
+    arr_data.label = '{}-MSD'.format(structure.label)
+    arr_data.set_array('msd', arr)
+    arr_data._set_attr('species_of_interest', species_of_interest)
+    for k,v in res.items():
+        arr_data._set_attr(k,v)
+
+    return {'msd_results':arr_data}
+
+
+
+
+
+

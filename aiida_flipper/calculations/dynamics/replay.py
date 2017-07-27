@@ -7,6 +7,7 @@ from aiida.orm.querybuilder import QueryBuilder
 from aiida.common.datastructures import calc_states
 from aiida.common.links import LinkType
 from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, get_structure_from_trajectory_inline
+from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
 import numpy as np
 
@@ -29,8 +30,9 @@ class ReplayCalculation(ChillstepCalculation):
     _MAX_ITERATIONS = 999
     def start(self):
         print "starting"
-        self.ctx.steps_todo = self.inputs.moldyn_parameters.dict.nstep # Number of steps I have to do:
-        self.ctx.max_steps_percalc = self.inputs.moldyn_parameters.dict.max_steps_percalc # Number of steps I have to do:
+        moldyn_parameters_d = self.inputs.moldyn_parameters.get_dict()
+        self.ctx.steps_todo = moldyn_parameters_d['nstep'] # Number of steps I have to do:
+        self.ctx.max_steps_percalc = moldyn_parameters_d.get('max_steps_percalc', None) # Number of steps I have to do:
         self.ctx.steps_done = 0 # Number of steps done, obviously 0 in the beginning
         self.goto(self.run_calculation)
         self.ctx.iteration = 0
@@ -46,12 +48,20 @@ class ReplayCalculation(ChillstepCalculation):
             if isinstance(input_node, Data):
                 calc.add_link_from(input_node, label=linkname)
         input_dict = self.inp.parameters.get_dict()
-        input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
-        input_dict['CONTROL']['max_seconds'] = max_wallclock_seconds - 180 # Give the code 3 minnutes to terminate gracefully
+        if self.ctx.max_steps_percalc is not None:
+            input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
+        else:
+            input_dict['CONTROL']['nstep'] = self.ctx.steps_todo
+        
+        input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9)) # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
         # set the resources:
         calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
-
+        try:
+            calc._set_parent_remotedata(self.inp.remote_folder)
+        except:
+            # No remote folder!
+            pass
         # Now, if I am restarting from a previous calculation, I will use the inline calculation
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
@@ -63,11 +73,11 @@ class ReplayCalculation(ChillstepCalculation):
 
             input_dict['IONS']['ion_velocities'] = 'from_input'
             kwargs = dict(trajectory=lastcalc.out.output_trajectory,
-                    parameters=ParameterData(dict=dict(
+                    parameters=get_or_create_parameters(dict(
                         step_index=-1,
-                        recenter=True,
+                        recenter=False,
                         create_settings=True,
-                        complete_missing=True)),
+                        complete_missing=True), store=True),
                 structure=self.inp.structure)
             try:
                 kwargs['settings'] = self.inp.settings
@@ -79,7 +89,7 @@ class ReplayCalculation(ChillstepCalculation):
             calc.use_settings(res['settings'])
             return_d['get_structure'] = inlinec
 
-        calc.use_parameters(ParameterData(dict=input_dict))
+        calc.use_parameters(get_or_create_parameters(input_dict, store=True))
         self.ctx.lastcalc_uuid = calc.uuid
         self.goto(self.evaluate_calc)
         return return_d
@@ -99,45 +109,6 @@ class ReplayCalculation(ChillstepCalculation):
             self.goto(self.produce_output_trajectory)
 
 
-    def firstcalc(self):
-        calc = self.inp.code.new_calc()
-        for linkname, input_node in self.get_inputs_dict().iteritems():
-            if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
-                continue
-            if isinstance(input_node, Data):
-                calc.add_link_from(input_node, label=linkname)
-        # set the resources:
-        input_dict = self.inp.parameters.get_dict()
-        input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
-        calc.use_parameters(ParameterData(dict=input_dict))
-        calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
-        calc.set_max_wallclock_seconds(self.inputs.moldyn_parameters.dict.max_wallclock_seconds)
-        self.ctx.lastcalc_uuid = calc.uuid
-        self.goto(self.iterate)
-        return {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
-
-        # I simply us all my inputs here as input for the calculation!
-    
-    def iterate(self):
-        """
-        Check if I have to run again. If not, I exit
-        """
-        lastcalc = load_node(self.ctx.lastcalc_uuid)
-        if lastcalc.get_state() != calc_states.FINISHED:
-            raise Exception("My last calculation {} did not finish".format(lastcalc))
-        # get the steps I run
-        if self.ctx.steps_todo > 0:
-            # I have to run another calculation
-            self.ctx.iteration += 1
-            input_dict = newcalc.inp.parameters.get_dict()
-            input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
-            newcalc.use_parameters(ParameterData(dict=input_dict))
-            self.goto(self.iterate)
-            self.ctx.lastcalc_uuid = newcalc.uuid
-            return {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):newcalc}
-        else:
-            self.goto(self.produce_output_trajectory)
-
 
     def produce_output_trajectory(self):
         qb = QueryBuilder()
@@ -145,9 +116,18 @@ class ReplayCalculation(ChillstepCalculation):
         qb.append(Calculation, output_of='m', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
-        calc, res = concatenate_trajectory_inline(**d)
+        # If I have produced several trajectories, I concatenate them here:
+        if len(d) > 1:
+            calc, res = concatenate_trajectory_inline(**d)
+            returnval = {'concatenate':calc, 'total_trajectory':res['concatenated_trajectory']}
+        elif len(d) == 1:
+            # No reason to concatenate if I have only one trajectory (saves space in repository)
+            returnval = {'total_trajectory':d.values()[0]}
+        else:
+            raise Exception("I found no trajectories produced")
+
         self.goto(self.exit)
-        return {'concatenate':calc, 'total_trajectory':res['concatenated_trajectory']}
+        return returnval
 
     def get_slave_calculations(self):
         """
