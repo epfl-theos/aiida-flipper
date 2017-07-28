@@ -15,11 +15,11 @@ class DiffusionCalculation(ChillstepCalculation):
         diffusion_parameters_d = inp_d.pop('diffusion_parameters').get_dict()
         inp_d.pop('msd_parameters')
 
-        calculation = BranchingCalculation(**inp_d)
-        self.goto(self.iterate)
-
-        self.ctx.lastcalculation_uuid = calculation.uuid
         self.ctx.branching_counter = 0
+        calculation = BranchingCalculation(**inp_d)
+        calculation.label = '{}-branching-{}'.format(self.label, self.ctx.branching_counter)
+        self.ctx.lastcalculation_uuid = calculation.uuid
+        self.goto(self.iterate)
         return {'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))) : calculation}
 
     def iterate(self):
@@ -28,7 +28,7 @@ class DiffusionCalculation(ChillstepCalculation):
         #~ branches = self.get_branches()
         minimum_nr_of_branching = diffusion_parameters_d.get('min_nr_of_branching', 0)
         
-        if minimum_nr_of_branching > self.ctx.branching_counter and 0:
+        if minimum_nr_of_branching > self.ctx.branching_counter:
             # I don't even care, I just launch the next!
 
             self.goto(self.launch_branching)
@@ -50,7 +50,7 @@ class DiffusionCalculation(ChillstepCalculation):
                 self.goto(self.collect)
             else:
                 # Not converged, launch more!
-                self.goto(launch_branching)
+                self.goto(self.launch_branching)
     def launch_branching(self):
         # Get the last calculation!
         # Make a new settings object to restart from the last configurations
@@ -88,14 +88,13 @@ class DiffusionCalculation(ChillstepCalculation):
 
         calculation = BranchingCalculation(**inp_d)
         self.ctx.lastcalculation_uuid = calculation.uuid
-        
         returnvals = {}
-        # return the inlinecalc to mark it as a slave
+        # return the inlinecalc to mark it as a slave. Give it the counter value before incrementing
         returnvals['get_structure_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))] = inlinec
         self.ctx.branching_counter +=1
-        self.goto(self.iterate)
+        calculation.label = '{}-branching-{}'.format(self.label, self.ctx.branching_counter)
+        # Give it the value after incrementing!
         returnvals['branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))] = calculation
-        
         self.goto(self.iterate)
         return returnvals
 

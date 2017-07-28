@@ -74,7 +74,9 @@ class BranchingCalculation(ChillstepCalculation):
         inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_thermalize
         inp_d['parameters'] = self.inp.parameters_thermalize
         self.goto(self.run_NVT)
-        return {'thermalizer':ReplayCalculation(**inp_d)}
+        c = ReplayCalculation(**inp_d)
+        c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
+        return {'thermalizer':c}
 
     def run_NVT(self):
         """
@@ -108,6 +110,7 @@ class BranchingCalculation(ChillstepCalculation):
             inp_d['structure']=res['structure']
 
         returnval['slave_NVT'] = ReplayCalculation(**inp_d)
+        returnval['slave_NVT'].label = '{}{}NVT'.format(self.label, '-' if self.label else '')
         self.goto(self.run_NVE)
         return returnval
 
@@ -132,13 +135,15 @@ class BranchingCalculation(ChillstepCalculation):
                     structure=self.inp.structure, trajectory=traj, settings=settings,
                     parameters=ParameterData(dict=dict(
                             step_index=idx,
-                            recenter=self.parameters_branching.dict.recenter_before_nve,
+                            recenter=self.inputs.parameters_branching.dict.recenter_before_nve,
                             create_settings=True,
                             complete_missing=True)))
             inlinec, res = get_structure_from_trajectory_inline(**kwargs)
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']
-            slaves['slave_NVE_{}'.format(str(count).rjust(len(str(len(indices))),str(0)))]  = ReplayCalculation(**inp_d)
+            replay = ReplayCalculation(**inp_d)
+            replay.label = '{}{}NVE-{}'.format(self.label, '-' if self.label else '', count)
+            slaves['slave_NVE_{}'.format(str(count).rjust(len(str(len(indices))),str(0)))]  = replay
             slaves['get_step_{}'.format(str(idx).rjust(len(str(len(indices))),str(0)))] = inlinec
         self.goto(self.collect_trajectories)
         return slaves

@@ -90,6 +90,7 @@ class ReplayCalculation(ChillstepCalculation):
             return_d['get_structure'] = inlinec
 
         calc.use_parameters(get_or_create_parameters(input_dict, store=True))
+        calc.label = '{}-{}'.format(self.label or 'Replay', self.ctx.iteration)
         self.ctx.lastcalc_uuid = calc.uuid
         self.goto(self.evaluate_calc)
         return return_d
