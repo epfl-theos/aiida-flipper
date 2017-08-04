@@ -97,17 +97,33 @@ class ReplayCalculation(ChillstepCalculation):
 
     def evaluate_calc(self):
         lastcalc = load_node(self.ctx.lastcalc_uuid)
-        if lastcalc.get_state() != calc_states.FINISHED: # Check what todo to improve
-            raise Exception("My last calculation {} did not finish".format(lastcalc))
-        nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
-        self.ctx.steps_todo -= nsteps_run_last_calc
-        self.ctx.steps_done += nsteps_run_last_calc
-        if self.ctx.steps_todo > 0:
-            # I have to run another calculation
+        if lastcalc.get_state() != calc_states.FINISHED:
+            # This is temporary solution implementing an exponential backoff mechanism.
+            # I raise the iterations by 1
+            # and I raise a flag that tells me that there are problems...
+            # I call this the back-off counter, and the prob that this chillstep is ticked
+            # decreases expontntially with the value of the backoff-counter.
+            # There is a limit to how many times I can do this, obviously, and I'm gonna set this to 5
+            # for now
+            try:
+                backoff_counter = self.ctx.backoff_counter
+            except AttributeError:
+                backoff_counter = 0
+            if backoff_counter > 5:
+                raise Exception("My last calculation {} did not finish, and I used my 5 trials up!".format(lastcalc))
             self.ctx.iteration += 1
+            self.backoff_counter = backoff_counter + 1
             self.goto(self.run_calculation)
         else:
-            self.goto(self.produce_output_trajectory)
+            nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
+            self.ctx.steps_todo -= nsteps_run_last_calc
+            self.ctx.steps_done += nsteps_run_last_calc
+            if self.ctx.steps_todo > 0:
+                # I have to run another calculation
+                self.ctx.iteration += 1
+                self.goto(self.run_calculation)
+            else:
+                self.goto(self.produce_output_trajectory)
 
 
 
