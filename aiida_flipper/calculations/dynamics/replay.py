@@ -36,6 +36,8 @@ class ReplayCalculation(ChillstepCalculation):
         self.ctx.steps_done = 0 # Number of steps done, obviously 0 in the beginning
         self.goto(self.run_calculation)
         self.ctx.iteration = 0
+        # TODO, you could potentially change that in the future
+        self.ctx.restart_from = None
 
 
     def run_calculation(self):
@@ -65,11 +67,10 @@ class ReplayCalculation(ChillstepCalculation):
         # Now, if I am restarting from a previous calculation, I will use the inline calculation
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
-        if self.ctx.iteration > 0:
+        if self.ctx.restart_from:
             # This is a restart from the previous calculation!
-            lastcalc = load_node(self.ctx.lastcalc_uuid)
-            # The old way:
-            #~ newcalc = lastcalc.create_restart(parent_folder_symlink=True) # I don't really care how this is achieved, the plugin needs to create a valid restart!
+            lastcalc = load_node(self.ctx.restart_from)
+
 
             input_dict['IONS']['ion_velocities'] = 'from_input'
             kwargs = dict(trajectory=lastcalc.out.output_trajectory,
@@ -111,6 +112,10 @@ class ReplayCalculation(ChillstepCalculation):
                 backoff_counter = 0
             if backoff_counter > 5:
                 raise Exception("My last calculation {} did not finish, and I used my 5 trials up!".format(lastcalc))
+            try:
+                self.ctx.restart_from
+            except:
+                self.ctx.restart_from = None
             self.ctx.iteration += 1
             self.backoff_counter = backoff_counter + 1
             self.goto(self.run_calculation)
@@ -118,6 +123,8 @@ class ReplayCalculation(ChillstepCalculation):
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
             self.ctx.steps_todo -= nsteps_run_last_calc
             self.ctx.steps_done += nsteps_run_last_calc
+            # I set the calculation to restart from as the last one!
+            self.ctx.restart_from = self.ctx.lastcalc_uuid
             if self.ctx.steps_todo > 0:
                 # I have to run another calculation
                 self.ctx.iteration += 1
