@@ -78,8 +78,9 @@ class SinglescfCalculation(ChillstepCalculation):
 
     def check(self):
         subc = self.out.scf_calculation
-        self.goto(self.exit)
-        if subc.get_state() == calc_states.FINISHED:
+        if subc.get_state() != calc_states.FINISHED:
+            raise Exception("My SCF-calculation {} failed".format(subc.uuid))
+        else:
             try:
                 # Maybe I'm supposed to store the result?
                 g = Group.get_from_string(self.inp.parameters.dict.results_group_name)
@@ -87,8 +88,8 @@ class SinglescfCalculation(ChillstepCalculation):
             except Exception as e:
                 print '!!!!!!!!!', e
                 pass
+            self.goto(self.exit)
             return {
                 'remote_folder':subc.out.remote_folder # for the restart
             }
-        else:
-            self.set_state(calc_states.FAILED)
+

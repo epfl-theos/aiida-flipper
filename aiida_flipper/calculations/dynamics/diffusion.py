@@ -6,6 +6,10 @@ from aiida.orm.querybuilder import QueryBuilder
 from aiida.common.links import LinkType
 from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida_scripts.database_utils.reuse import get_or_create_parameters
+
+from aiida.backends.utils import get_automatic_user
+USER = get_automatic_user()
+
 class DiffusionCalculation(ChillstepCalculation):
     def start(self):
         # Now, I start by checking that I have all the parameters I need
@@ -45,11 +49,15 @@ class DiffusionCalculation(ChillstepCalculation):
                     structure=self.inputs.structure,
                     parameters=msd_parameters,
                     **branches)['msd_results']
-            print msd_results.get_attr('Li').keys()
-            if msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s'] < diffusion_parameters_d['sem_threshold']:
+            sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
+            sem_target = diffusion_parameters_d['sem_threshold']
+            if sem < sem_target: #msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s'] < diffusion_parameters_d['sem_threshold']:
+            #if msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s'] < diffusion_parameters_d['sem_threshold']:
+                # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
                 self.goto(self.collect)
             else:
-                # Not converged, launch more!
+                self.add_comment('SEM so far is {}, below target value of {}, branching more!'.format(sem, sem_target), user=USER)
+                # Not converged, launch more
                 self.goto(self.launch_branching)
     def launch_branching(self):
         # Get the last calculation!
