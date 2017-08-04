@@ -117,16 +117,17 @@ class ReplayCalculation(ChillstepCalculation):
             except:
                 self.ctx.restart_from = None
             self.ctx.iteration += 1
-            self.backoff_counter = backoff_counter + 1
+            self.ctx.backoff_counter = backoff_counter + 1
             self.goto(self.run_calculation)
         else:
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
             self.ctx.steps_todo -= nsteps_run_last_calc
             self.ctx.steps_done += nsteps_run_last_calc
             # I set the calculation to restart from as the last one!
-            self.ctx.restart_from = self.ctx.lastcalc_uuid
+            
             if self.ctx.steps_todo > 0:
                 # I have to run another calculation
+                self.ctx.restart_from = self.ctx.lastcalc_uuid
                 self.ctx.iteration += 1
                 self.goto(self.run_calculation)
             else:
