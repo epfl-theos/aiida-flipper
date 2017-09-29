@@ -220,6 +220,7 @@ class FlipperParser(BasicpwParser):
                         try:
                             scalar_quantities[iline, ival] = float(val)
                         except ValueError:
+                            print line
                             scalar_quantities[iline, ival] = np.nan
                 print scalar_quantities[-1,:]
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)

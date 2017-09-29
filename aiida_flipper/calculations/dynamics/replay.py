@@ -120,6 +120,13 @@ class ReplayCalculation(ChillstepCalculation):
             self.ctx.backoff_counter = backoff_counter + 1
             self.goto(self.run_calculation)
         else:
+            # Set backoff counter back to 0 since the calculation now finished:
+            try:
+                if self.ctx.backoff_counter > 0:
+                    self.ctx.backoff_counter = 0
+            except AttributeError:
+                pass
+            
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
             self.ctx.steps_todo -= nsteps_run_last_calc
             self.ctx.steps_done += nsteps_run_last_calc

@@ -147,13 +147,18 @@ def get_diffusion_from_msd(structure, parameters, **trajectories):
     timesteps_set = set()
     units_set = set()
     vel_units_set = set()
-
     for t in trajdata_list:
-        input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
-        # get the timestep on the fly
-        timesteps_set.add(input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1))
         units_set.add(t.get_attr('units|positions'))
         vel_units_set.add(t.get_attr('units|velocities'))
+    try:
+        for t in trajdata_list:
+            timesteps_set.add(t.get_attr('timestep_in_fs'))
+
+    except AttributeError:
+        for t in trajdata_list:
+            input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
+            # get the timestep on the fly
+            timesteps_set.add(timeau_to_sec*2*1e15*input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1))
     # Checking if everything is consistent, 
     # Check same units:
     units_positions = units_set.pop()
@@ -166,13 +171,13 @@ def get_diffusion_from_msd(structure, parameters, **trajectories):
     if units_velocities == 'atomic':
         units_velocities = 'pw'
     # Same timestep is mandatory!
-    timestep = timesteps_set.pop()
+    timestep_fs = timesteps_set.pop()
     if timesteps_set:
-        timesteps_set.add(timestep)
+        timesteps_set.add(timestep_fs)
         raise Exception("Multiple timesteps {}".format(timesteps_set))
 
     # I work with fs, not QE units!
-    timestep_fs = timestep*timeau_to_sec*2*1e15
+    #~ timestep_fs = timestep
     equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
 
     trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
