@@ -146,6 +146,7 @@ class ReplayCalculation(ChillstepCalculation):
     def produce_output_trajectory(self):
         qb = QueryBuilder()
         qb.append(ReplayCalculation, filters={'id':self.id}, tag='m')
+        # TODO: Are filters on the state of the calculation needed here?
         qb.append(Calculation, output_of='m', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}

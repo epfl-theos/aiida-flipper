@@ -409,6 +409,40 @@ class FlipperParser(Parser):
 
         return successful, new_nodes_list
 
+    def get_parser_settings_key(self):
+        """
+        Return the name of the key to be used in the calculation settings, that
+        contains the dictionary with the parser_options
+        """
+        return 'parser_options'
+
+    def get_linkname_outstructure(self):
+        """
+        Returns the name of the link to the output_structure
+        Node exists if positions or cell changed.
+        """
+        return 'output_structure'
+
+    def get_linkname_outtrajectory(self):
+        """
+        Returns the name of the link to the output_trajectory.
+        Node exists in case of calculation='md', 'vc-md', 'relax', 'vc-relax'
+        """
+        return 'output_trajectory'
+
+    def get_linkname_outarray(self):
+        """
+        Returns the name of the link to the output_array
+        Node may exist in case of calculation='scf'
+        """
+        return 'output_array'
+
+    def get_linkname_out_kpoints(self):
+        """
+        Returns the name of the link to the output_kpoints
+        Node exists if cell has changed and no bands are stored.
+        """
+        return 'output_kpoints'
 
 
 
