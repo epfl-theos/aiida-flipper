@@ -6,6 +6,7 @@ from aiida.orm.data.remote import RemoteData
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.kpoints import KpointsData
+from aiida.orm.data.array.bands import BandsData
 from aiida.orm.data.singlefile import SinglefileData
 from aiida.orm.calculation.inline import optional_inline
 from aiida.common.exceptions import AiidaException, NotExistent
@@ -82,7 +83,7 @@ class SingleScfWorkChain(WorkChain):
 
         spec.output('output_parameters', valid_type=ParameterData)
         spec.output('remote_folder', valid_type=RemoteData)
-        spec.output('occupations', valid_type=FolderData)
+        spec.output('occupations', valid_type=BandsData)
 
 
     def setup(self):
@@ -153,7 +154,7 @@ class SingleScfWorkChain(WorkChain):
         self.ctx.iteration += 1
 
         inputs = dict(self.ctx.inputs)
-        inputs['parameters'] = ParameterData(dict=inputs['parameters'])
+        inputs['parameters'] = ParameterData(dict=inputs['parameters']).store()
 
         running = submit(PwBaseWorkChain, **inputs)
 
@@ -199,8 +200,8 @@ class SingleScfWorkChain(WorkChain):
         res = check_if_insulator_inline(pw_output_parameters=output_parameters, occupations=occupations, store=True)
         self.report('Based output parameters {} and occupations {} I judge this to be{} an insulator'.
                 format(output_parameters, occupations, ' NOT' if not(res['output_parameters'].get_attr('is_insulator')) else ''))
-        self.out('output_occupations', occupations)
-        self.out('insulator_judgement', res['output_parameters'])
+        self.out('occupations', occupations)
+        self.out('output_parameters', res['output_parameters'])
         self.out('remote_folder', remote_folder)
 
 

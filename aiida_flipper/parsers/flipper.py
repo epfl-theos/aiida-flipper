@@ -20,6 +20,7 @@ from aiida.common.utils import xyz_parser_iterator
 from aiida.common.constants import bohr_to_ang, timeau_to_sec
 
 from aiida.parsers.exceptions import OutputParsingError
+from aiida.parsers.parser import Parser
 
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 import os, numpy as np, re
@@ -77,7 +78,7 @@ POS_BLOCK_REGEX = re.compile("""
 ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?)+\s*)+
 """, re.X | re.M)
 
-class FlipperParser(BasicpwParser):
+class FlipperParser(Parser):
     def parse_with_retrieved(self, retrieved):
 
         # from carlo.codes.kohn.pw.pwimmigrant import get_nstep, get_warnings

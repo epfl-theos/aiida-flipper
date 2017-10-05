@@ -110,8 +110,9 @@ class ReplayCalculation(ChillstepCalculation):
                 backoff_counter = self.ctx.backoff_counter
             except AttributeError:
                 backoff_counter = 0
-            if backoff_counter > 5:
-                raise Exception("My last calculation {} did not finish, and I used my 5 trials up!".format(lastcalc))
+            ntrials = 2
+            if backoff_counter > ntrials:
+                raise Exception("My last calculation {} did not finish, and I used my {} trials up!".format(lastcalc, ntrials))
             try:
                 self.ctx.restart_from
             except:

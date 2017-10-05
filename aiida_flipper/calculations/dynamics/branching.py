@@ -90,6 +90,8 @@ class BranchingCalculation(ChillstepCalculation):
         inp_d['parameters'] = self.inp.parameters_nvt
         returnval = {}
         if self.ctx.thermalize:
+            if self.out.thermalizer.get_state() == 'FAILED':
+                raise Exception("Thermalizer failed")
             traj = self.out.thermalizer.out.total_trajectory
 
             kwargs = dict(trajectory=traj, parameters=ParameterData(dict=dict(
@@ -118,6 +120,10 @@ class BranchingCalculation(ChillstepCalculation):
         inp_d = {k:v for k,v in self.get_inputs_dict().items() if not 'parameters_' in k}
         inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_nve
         inp_d['parameters'] = self.inp.parameters_nve
+
+
+        if self.out.slave_NVT.get_state() == 'FAILED':
+            raise Exception("NVT failed")
 
         traj = self.out.slave_NVT.out.total_trajectory
 

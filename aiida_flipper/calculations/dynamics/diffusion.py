@@ -31,12 +31,12 @@ class DiffusionCalculation(ChillstepCalculation):
         msd_parameters =  self.inputs.msd_parameters
         #~ branches = self.get_branches()
         minimum_nr_of_branching = diffusion_parameters_d.get('min_nr_of_branching', 0)
-        
+        lastcalc = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))))
+        if lastcalc.get_state() == 'FAILED':
+            raise Exception("Last branch {} failed".format(lastcalc))
         if minimum_nr_of_branching > self.ctx.branching_counter:
             # I don't even care, I just launch the next!
-
             self.goto(self.launch_branching)
-            
         elif diffusion_parameters_d['max_nr_of_branching'] < self.ctx.branching_counter:
 
             self.goto(self.collect)
@@ -70,8 +70,6 @@ class DiffusionCalculation(ChillstepCalculation):
 
         nvt_replay = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))).out.slave_NVT
 
-        
-        
         kwargs = dict(trajectory=nvt_replay.out.total_trajectory,
                     parameters=get_or_create_parameters(dict(
                         step_index=-1,
@@ -85,9 +83,8 @@ class DiffusionCalculation(ChillstepCalculation):
             pass # settings will be None
 
         inlinec, res = get_structure_from_trajectory_inline(**kwargs)
-        # Now, let me get t
-        
-        
+
+
         inp_d.pop('msd_parameters')
         inp_d.pop('moldyn_parameters_thermalize')
         inp_d.pop('parameters_thermalize')
