@@ -127,7 +127,11 @@ class ReplayCalculation(ChillstepCalculation):
                     self.ctx.backoff_counter = 0
             except AttributeError:
                 pass
-            
+            t = lastcalc.out.output_trajectory
+            total_energies = t.get_array('total_energies')
+            print total_energies.max() - total_energies.min()
+
+
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
             self.ctx.steps_todo -= nsteps_run_last_calc
             self.ctx.steps_done += nsteps_run_last_calc

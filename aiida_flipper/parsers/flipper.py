@@ -221,9 +221,9 @@ class FlipperParser(Parser):
                         try:
                             scalar_quantities[iline, ival] = float(val)
                         except ValueError:
-                            print line
+                            # print line
                             scalar_quantities[iline, ival] = np.nan
-                print scalar_quantities[-1,:]
+                # print scalar_quantities[-1,:]
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
 
 
@@ -406,6 +406,9 @@ class FlipperParser(Parser):
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
 
+        for arr in (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures):
+            if np.isnan(arr).any():
+                successful = False
 
         return successful, new_nodes_list
 
