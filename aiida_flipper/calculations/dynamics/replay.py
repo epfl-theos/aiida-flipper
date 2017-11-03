@@ -127,9 +127,14 @@ class ReplayCalculation(ChillstepCalculation):
                     self.ctx.backoff_counter = 0
             except AttributeError:
                 pass
-            t = lastcalc.out.output_trajectory
-            total_energies = t.get_array('total_energies')
-            print total_energies.max() - total_energies.min()
+            total_energy_max_fluctuation = self.inputs.moldyn_parameters.get_dict().get('total_energy_max_fluctuation', None)
+            if total_energy_max_fluctuation is not None:
+                # Checking the fluctuations of the total energy:
+                t = lastcalc.out.output_trajectory
+                total_energies = t.get_array('total_energies')
+                diff = total_energies.max() - total_energies.min()
+                if diff > total_energy_max_fluctuation:
+                    raise Exception("Fluctuations of the total energy ( {} ) exceeded threshold ( {} ) !".format(diff, total_energy_max_fluctuation))
 
 
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
@@ -182,7 +187,7 @@ class ReplayCalculation(ChillstepCalculation):
         # I don't even have to be finished,  for this
         qb = QueryBuilder()
         qb.append(ReplayCalculation, filters={'id':self.id}, tag='m')
-        qb.append(Calculation, output_of='m', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
+        qb.append(Calculation, output_of='m', edge_project='label', filters={'state':calc_states.FINISHED}, edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
         return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']
