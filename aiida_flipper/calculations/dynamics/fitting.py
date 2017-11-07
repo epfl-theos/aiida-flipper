@@ -1,7 +1,7 @@
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.data.parameter import ParameterData
-from aiida.orm import Data, load_node, Calculation, CalculationFactory
-from aiida.orm.calculation.inline import optional_inline
+from aiida.orm import Data, load_node, Calculation, CalculationFactory, Group
+from aiida.orm.calculation.inline import optional_inline, make_inline
 from aiida.orm.data.array import ArrayData
 from aiida_scripts.database_utils.reuse import get_or_create_parameters
 from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
@@ -47,7 +47,7 @@ def rattle_randomly_structure_inline(structure, parameters):
     array._set_attr('units|positions', 'angstrom')
     return dict(rattled_positions=array)
 
-@optional_inline
+@make_inline
 def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
     from aiida_scripts.fitting.fit_forces import Force, fit_with_lin_reg, make_fitted, plot_forces
     params_dict = parameters.get_dict()
@@ -210,10 +210,19 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             starting_point=1,
             divide_r2=parameters_d['divide_r2']
         )
-        # TODO: CALL linkv
-        self.goto(self.exit)
-        return get_pinball_factors_inline(
+        calc, res = get_pinball_factors_inline(
                 parameters=get_or_create_parameters(params_d),
                 trajectory_scf=trajectory_scf,
-                trajectory_pb=trajectory_pb, store=True)
+                trajectory_pb=trajectory_pb)
+        coefficients = res['coefficients']
+        try:
+            # Maybe I'm supposed to store the result?
+            g = Group.get_from_string(self.inp.parameters.dict.results_group_name)
+            g.add_nodes(coefficients)
+        except Exception as e:
+            print '!!!!!!!!!', e
+            pass
+        # TODO: CALL linkv
+        self.goto(self.exit)
+        return {'get_pinball_factors':calc, 'coefficients':coefficients}
 

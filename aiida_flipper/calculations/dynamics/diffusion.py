@@ -1,7 +1,7 @@
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.chillstep.user.dynamics.branching import BranchingCalculation
 from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline
-from aiida.orm import load_node
+from aiida.orm import load_node, Group
 from aiida.orm.querybuilder import QueryBuilder
 from aiida.common.links import LinkType
 from aiida.orm.data.array.trajectory import TrajectoryData
@@ -112,6 +112,13 @@ class DiffusionCalculation(ChillstepCalculation):
                     parameters=msd_parameters,
                     **branches)
         self.goto(self.exit)
+        try:
+            # Maybe I'm supposed to store the result?
+            g = Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
+            g.add_nodes(res['msd_results'])
+        except Exception as e:
+            pass
+
         res['get_diffusion'] = c
         return res
 

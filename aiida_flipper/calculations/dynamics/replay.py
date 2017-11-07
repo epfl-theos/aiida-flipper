@@ -15,10 +15,11 @@ import numpy as np
 
 
 def get_completed_number_of_steps(calc):
-    try:
-        nstep = calc.res.nstep
-    except AttributeError:
-        nstep = calc.out.output_trajectory.get_attr('array|positions.0')
+    #~ try:
+        #~ nstep = calc.res.nstep
+    #~ except AttributeError:
+    # Reading the number of steps from the trajectory!
+    nstep = calc.inp.parameters.dict.CONTROL.get('iprint', 1)*calc.out.output_trajectory.get_attr('array|positions.0')
     return nstep
 
 
@@ -133,15 +134,19 @@ class ReplayCalculation(ChillstepCalculation):
                 t = lastcalc.out.output_trajectory
                 total_energies = t.get_array('total_energies')
                 diff = total_energies.max() - total_energies.min()
+                print diff, total_energy_max_fluctuation
                 if diff > total_energy_max_fluctuation:
+                    print "NOOO"
                     raise Exception("Fluctuations of the total energy ( {} ) exceeded threshold ( {} ) !".format(diff, total_energy_max_fluctuation))
-
+                else:
+                    print "ALL GOOD"
 
             nsteps_run_last_calc = get_completed_number_of_steps(lastcalc)
             self.ctx.steps_todo -= nsteps_run_last_calc
             self.ctx.steps_done += nsteps_run_last_calc
+            #~ print nsteps_run_last_calc, self.ctx.steps_todo,self.ctx.steps_done
+            #~ return
             # I set the calculation to restart from as the last one!
-            
             if self.ctx.steps_todo > 0:
                 # I have to run another calculation
                 self.ctx.restart_from = self.ctx.lastcalc_uuid
