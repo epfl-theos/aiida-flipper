@@ -7,6 +7,8 @@ from aiida_scripts.database_utils.reuse import get_or_create_parameters
 from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
 import numpy as np, copy
 
+from replay import ReplayCalculation
+
 HUSTLER_DFT_PARAMS_DICT = {
     u'CONTROL': {
         u'calculation': 'md',
@@ -87,12 +89,14 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         # I will produce a trajectory that comes from randomly displacing
         # the pinball atoms.
         self.inp.structure
-        self.inp.remote_folder
-        self.inp.electron_parameters
+        # self.inp.remote_folder
+        self.inp.remote_folder_flipper
+        
+        # self.inp.electron_parameters
         self.inp.parameters
         self.inp.flipper_code
 
-        self.goto(self.launch_calculations)
+        self.goto(self.launch_replays)
         parameters_d = self.inp.parameters.get_dict()
         pks= parameters_d['pinball_kind_symbol']
         nr_of_pinballs = self.inp.structure.get_site_kindnames().count(pks)
@@ -191,6 +195,74 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         self.goto(self.fit)
         return {'hustler_flipper':flipper_calc, 'hustler_dft':dft_calc}
 
+    def launch_replays(self):
+
+        # start was before this step, so I have rattled_positions in my outputs!
+        rattled_positions = self.out.rattled_positions
+
+
+        own_inputs = self.get_inputs_dict()
+        own_parameters = own_inputs['parameters'].get_dict()
+        # pseudofamily = own_parameters['pseudofamily']
+        # pseudos=get_pseudos(structure=structure,pseudo_family_name=pseudofamily)
+        # building parameters for DFT Replay!
+        
+
+        inputs_dft = dict(
+            moldyn_parameters=get_or_create_parameters(dict(
+                    nstep=self.ctx.nstep,
+                    max_wallclock_seconds=self.inp.parameters.dict.dft_walltime_seconds,
+                    resources=dict(num_machines=self.inp.parameters.dict.dft_num_machines),
+                    is_hustler=True,
+                ), store=True),
+            structure=own_inputs['structure'],
+            hustler_positions=rattled_positions,
+            parameters=own_inputs['parameters_dft'],
+        )
+        inputs_flipper = dict(
+            moldyn_parameters=get_or_create_parameters(dict(
+                    nstep=self.ctx.nstep,
+                    max_wallclock_seconds=self.inp.parameters.dict.flipper_walltime_seconds,
+                    resources=dict(num_machines=self.inp.parameters.dict.flipper_num_machines),
+                    is_hustler=True,
+                ), store=True),
+            structure=own_inputs['structure'],
+            hustler_positions=rattled_positions,
+            parameters=own_inputs['parameters_flipper'],
+            remote_folder=self.inp.flipper_remote_folder,
+        )
+        pseudos = {k:v for k,v in own_inputs.items() if k.startswith('pseudo')}
+        inputs_dft.update(pseudos)
+        inputs_flipper.update(pseudos)
+
+        if own_parameters['use_same_settings']:
+            inputs_dft['settings'] = own_inputs['settings']
+            inputs_flipper['settings'] = own_inputs['settings']
+        else:
+            inputs_dft['settings'] = own_inputs['settings_dft']
+            inputs_flipper['settings'] = own_inputs['settings_flipper']
+
+        if own_parameters['use_same_kpoints']:
+            inputs_dft['kpoints'] = own_inputs['kpoints']
+            inputs_flipper['kpoints'] = own_inputs['kpoints']
+        else:
+            inputs_dft['kpoints'] = own_inputs['kpoints_dft']
+            inputs_flipper['kpoints'] = own_inputs['kpoints_flipper']
+
+        if own_parameters['use_same_code']:
+            inputs_dft['code'] = own_inputs['code']
+            inputs_flipper['code'] = own_inputs['code']
+        else:
+            inputs_dft['code'] = own_inputs['dft_code']
+            inputs_flipper['code'] = own_inputs['flipper_code']
+
+        self.goto(self.analyze)
+        return {'hustler_flipper':ReplayCalculation(**inputs_flipper), 'hustler_dft':ReplayCalculation(**inputs_dft)}
+
+    def analyze(self):
+        # TODO: Implement the analysis of how far the hustler reached! and relaunch if necessary!
+        # TODO: Remove non-converged steps from the analysis.
+        self.goto(self.fit)
     def fit(self):
         parameters_d = self.inp.parameters.get_dict()
         nstep =self.ctx.nstep
@@ -201,6 +273,8 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             shape = traj.get_positions().shape
             if shape[0] != nstep:
                 raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.output_trajectory.id, shape, nstep))
+
+        # IMPORTANT TODO: Exclude forces where scf failed! The hustler (maybe?) doesn't fail if SCF doesn't converge...
 
         params_d = dict(
             signal_indices = (1,3,4) if parameters_d['is_local'] else (1,2,3,4),

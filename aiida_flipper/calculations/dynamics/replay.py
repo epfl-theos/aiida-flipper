@@ -55,8 +55,8 @@ class ReplayCalculation(ChillstepCalculation):
             input_dict['CONTROL']['nstep'] = min((self.ctx.steps_todo, self.ctx.max_steps_percalc))
         else:
             input_dict['CONTROL']['nstep'] = self.ctx.steps_todo
-        
-        input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9)) # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
+        # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
+        input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9)) 
         # set the resources:
         calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
