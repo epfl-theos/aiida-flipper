@@ -33,7 +33,7 @@ class DiffusionCalculation(ChillstepCalculation):
         minimum_nr_of_branching = diffusion_parameters_d.get('min_nr_of_branching', 0)
         lastcalc = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))))
         if lastcalc.get_state() == 'FAILED':
-            raise Exception("Last branch {} failed".format(lastcalc))
+            raise Exception("Last branch {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
         if minimum_nr_of_branching > self.ctx.branching_counter:
             # I don't even care, I just launch the next!
             self.goto(self.launch_branching)

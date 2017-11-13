@@ -1,5 +1,7 @@
 from aiida.orm.calculation.chillstep import ChillstepCalculation
+from aiida.orm.calculation.inline import InlineCalculation, make_inline
 from aiida.orm.data.parameter import ParameterData
+from aiida.orm.data.array import ArrayData
 from aiida.orm import Data, load_node, Calculation
 #~ from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.trajectory import TrajectoryData
@@ -22,6 +24,16 @@ def get_completed_number_of_steps(calc):
     nstep = calc.inp.parameters.dict.CONTROL.get('iprint', 1)*calc.out.output_trajectory.get_attr('array|positions.0')
     return nstep
 
+@make_inline
+def split_hustler_array_inline(array, parameters):
+    assert isinstance(parameters, ParameterData), "parametes is not ParameterData"
+    assert isinstance(array, ArrayData)
+
+    newarray = ArrayData()
+    newarray.set_array('symbols', array.get_array('symbols'))
+    newarray.set_array('positions', array.get_array('positions')[parameters.dict.index:])
+    newarray._set_attr('units|positions', array.get_attr('units|positions'))
+    return dict(split_array=newarray)
 
 
 class ReplayCalculation(ChillstepCalculation):
@@ -44,9 +56,12 @@ class ReplayCalculation(ChillstepCalculation):
     def run_calculation(self):
         # create a calculation:
         calc = self.inp.code.new_calc()
-        max_wallclock_seconds = self.inputs.moldyn_parameters.dict.max_wallclock_seconds
+        moldyn_parameters_d = self.inputs.moldyn_parameters.get_dict()
+        max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
         for linkname, input_node in self.get_inputs_dict().iteritems():
             if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
+                continue
+            if linkname in ('hustler_positions', ):
                 continue
             if isinstance(input_node, Data):
                 calc.add_link_from(input_node, label=linkname)
@@ -61,18 +76,30 @@ class ReplayCalculation(ChillstepCalculation):
         calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
         try:
+            # There's something very strange going on: This works only for flipper, not for Hustler! Why???
             calc._set_parent_remotedata(self.inp.remote_folder)
-        except:
+        except Exception as e:
             # No remote folder!
+            print e
             pass
         # Now, if I am restarting from a previous calculation, I will use the inline calculation
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
-        if self.ctx.restart_from:
+        if moldyn_parameters_d.get('is_hustler', False):
+            # If I have done steps, I need to produce a new array for the positions,
+            # cutting the steps that I have done!
+            hustler_positions = self.inputs.hustler_positions
+            if self.ctx.steps_done:
+                inlinec, res = split_hustler_array_inline(
+                        array=hustler_positions,
+                        parameters=get_or_create_parameters(dict(index=self.ctx.steps_done)))
+                return_d['split_hustler_array_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0)))] = inlinec
+                calc.use_array(res['split_array'])
+            else:
+                calc.use_array(hustler_positions)
+        elif self.ctx.restart_from:
             # This is a restart from the previous calculation!
             lastcalc = load_node(self.ctx.restart_from)
-
-
             input_dict['IONS']['ion_velocities'] = 'from_input'
             kwargs = dict(trajectory=lastcalc.out.output_trajectory,
                     parameters=get_or_create_parameters(dict(

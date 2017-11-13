@@ -122,10 +122,11 @@ class BranchingCalculation(ChillstepCalculation):
         inp_d['parameters'] = self.inp.parameters_nve
 
 
-        if self.out.slave_NVT.get_state() == 'FAILED':
-            raise Exception("NVT failed")
+        slave_NVT = self.out.slave_NVT
+        if slave_NVT.get_state() == 'FAILED':
+            raise Exception("NVT ( {} ) failed due to error:\n{}".format(slave_NVT.pk, slave_NVT.get_attr('fail_msg')))
 
-        traj = self.out.slave_NVT.out.total_trajectory
+        traj = slave_NVT.out.total_trajectory
 
         trajlen = traj.get_positions().shape[0]
         block_length =  1.0*trajlen / self.ctx.nr_of_branches

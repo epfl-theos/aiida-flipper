@@ -25,7 +25,7 @@ HUSTLER_DFT_PARAMS_DICT = {
     u'IONS':{}
 }
 
-@optional_inline
+@make_inline
 def rattle_randomly_structure_inline(structure, parameters):
     #~ from ase.constraints import FixAtoms
     #~ from random import randint
@@ -88,17 +88,16 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         # So, I have a structure that should be at the energetic minumum.
         # I will produce a trajectory that comes from randomly displacing
         # the pinball atoms.
-        self.inp.structure
-        # self.inp.remote_folder
-        self.inp.remote_folder_flipper
-        
-        # self.inp.electron_parameters
-        self.inp.parameters
-        self.inp.flipper_code
 
-        self.goto(self.launch_replays)
+        self.inp.structure
+        self.inp.remote_folder_flipper
+        self.inp.electron_parameters
+        self.inp.parameters
+        # self.inp.flipper_code
+        self.inp.pseudo_Li
+
         parameters_d = self.inp.parameters.get_dict()
-        pks= parameters_d['pinball_kind_symbol']
+        pks = parameters_d['pinball_kind_symbol']
         nr_of_pinballs = self.inp.structure.get_site_kindnames().count(pks)
         # Nr of configurations: How many configuration do I need to achieve the data points I want?
         nr_of_configurations = int(float(parameters_d['nr_of_force_components']) / nr_of_pinballs / 3) + 1 # Every pinball atoms has 3 force components
@@ -108,11 +107,15 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             'stdev':parameters_d['stdev']
         }
         # TODO: CALL link
-        rattled_positions = rattle_randomly_structure_inline(
+        c, res = rattled_positions = rattle_randomly_structure_inline(
                 structure=self.inp.structure,
-                parameters=get_or_create_parameters(rattling_parameters_d), store=True)['rattled_positions']
-        self.ctx.nstep = rattled_positions.get_attr('array|positions')[0]
-        return {'rattled_positions':rattled_positions}
+                parameters=get_or_create_parameters(rattling_parameters_d))
+        
+        self.ctx.nstep = res['rattled_positions'].get_attr('array|positions')[0]
+        res['rattle_structure'] = c
+        self.goto(self.launch_replays)
+        return res
+
 
     def launch_calculations(self):
         #~ rattled_positions = self.out.rattled_positions
@@ -222,14 +225,14 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         inputs_flipper = dict(
             moldyn_parameters=get_or_create_parameters(dict(
                     nstep=self.ctx.nstep,
-                    max_wallclock_seconds=self.inp.parameters.dict.flipper_walltime_seconds,
-                    resources=dict(num_machines=self.inp.parameters.dict.flipper_num_machines),
+                    max_wallclock_seconds=own_parameters['flipper_walltime_seconds'],
+                    resources=dict(num_machines=own_parameters['flipper_num_machines']),
                     is_hustler=True,
                 ), store=True),
             structure=own_inputs['structure'],
             hustler_positions=rattled_positions,
             parameters=own_inputs['parameters_flipper'],
-            remote_folder=self.inp.flipper_remote_folder,
+            remote_folder=self.inp.remote_folder_flipper,
         )
         pseudos = {k:v for k,v in own_inputs.items() if k.startswith('pseudo')}
         inputs_dft.update(pseudos)
@@ -266,13 +269,16 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
     def fit(self):
         parameters_d = self.inp.parameters.get_dict()
         nstep =self.ctx.nstep
-        trajectory_scf = self.out.hustler_dft.out.output_trajectory
-        trajectory_pb = self.out.hustler_flipper.out.output_trajectory
+        # trajectory_scf = self.out.hustler_dft.out.output_trajectory
+        trajectory_scf = self.out.hustler_dft.out.total_trajectory
+        # trajectory_pb = self.out.hustler_flipper.out.output_trajectory
+        trajectory_pb = self.out.hustler_flipper.out.total_trajectory
         
         for traj in (trajectory_scf, trajectory_pb):
             shape = traj.get_positions().shape
             if shape[0] != nstep:
-                raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.output_trajectory.id, shape, nstep))
+                #~ raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.output_trajectory.id, shape, nstep))
+                raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.total_trajectory.id, shape, nstep))
 
         # IMPORTANT TODO: Exclude forces where scf failed! The hustler (maybe?) doesn't fail if SCF doesn't converge...
 
