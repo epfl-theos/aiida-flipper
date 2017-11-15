@@ -1,47 +1,23 @@
-import os, numpy as np
+import os
 
 from aiida.orm import CalculationFactory
 PwCalculation = CalculationFactory("quantumespresso.pw")
 from aiida_quantumespresso.calculations import get_input_data_text, _lowercase_dict, _uppercase_dict
 
-from aiida.common.utils import classproperty
 from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.kpoints import KpointsData
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm.data.array import ArrayData
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.upf import UpfData
 from aiida.orm.data.remote import RemoteData
 from aiida.common.datastructures import CodeInfo, CalcInfo
 from aiida.common.exceptions import InputValidationError
-from aiida.common.constants import bohr_to_ang
 
 
-
-class HustlerCalculation(PwCalculation):
+class PesCalculation(PwCalculation):
     def _init_internal_params(self):
-        super(HustlerCalculation, self)._init_internal_params()
-        self._default_parser = 'quantumespresso.flipper'
-        self._EVP_FILE = 'verlet.evp'
-        self._FOR_FILE = 'verlet.for'
-        self._VEL_FILE = 'verlet.vel'
-        self._POS_FILE = 'verlet.pos'
-        self._HUSTLER_FILE = 'hustler.pos'
-
-    @classproperty
-    def _use_methods(cls):
-        """
-        Extend the parent _use_methods with further keys.
-        """
-        retdict = PwCalculation._use_methods
-
-        retdict['array'] = {
-            'valid_types': ArrayData,
-            'additional_parameter': None,
-            'linkname': 'array',
-            'docstring': "Use the node defining the trajectory to sample over",
-        }
-        return retdict
+        super(PesCalculation, self)._init_internal_params()
+        self._default_parser = 'quantumespresso.pes'
+        self._PES_FILE = 'potential.xsf' #hardcoded into pinball version!
 
     def _prepare_for_submission(self, tempfolder,
                                 inputdict):
@@ -117,8 +93,7 @@ class HustlerCalculation(PwCalculation):
                                                    "more than one time".format(kind))
                     pseudos[kind] = the_pseudo
 
-        #~ parent_calc_folder = inputdict.pop(self.get_linkname('parent_folder'), None)
-        # parent_calc_folder = inputdict.pop(self.get_linkname('remote_folder'), None)
+        #parent_calc_folder = inputdict.pop(self.get_linkname('parent_folder'), None)
         parent_calc_folder = inputdict.pop('remote_folder', None)
         if parent_calc_folder is not None:
             if not isinstance(parent_calc_folder, RemoteData):
@@ -136,13 +111,6 @@ class HustlerCalculation(PwCalculation):
         except KeyError:
             raise InputValidationError("No code specified for this calculation")
 
-        try:
-            hustler_arr = inputdict.pop(self.get_linkname('array'))
-        except KeyError:
-            raise InputValidationError("No array specified for this calculation")
-
-
-
         # Here, there should be no more parameters...
         if inputdict:
             raise InputValidationError("The following input data nodes are "
@@ -159,36 +127,6 @@ class HustlerCalculation(PwCalculation):
         ##############################
         # END OF INITIAL INPUT CHECK #
         ##############################
-
-
-
-        ##### THE hustler file:
-        hustler_positions = hustler_arr.get_array('positions')
-        pos_units = hustler_arr.get_attr('units|positions', 'angstrom')
-
-        if pos_units in ('atomic', 'bohr'):
-            pass
-        elif pos_units == 'angstrom':
-            hustler_positions /= bohr_to_ang
-        else:
-            raise InputValidationError("Unknown position units {}".format(pos_units))
-        # I need to check what units the positions were given
-        try:
-            symbols = hustler_arr.get_attr('symbols')
-        except Exception:
-            symbols = hustler_arr.get_array('symbols')
-        nstep, nhustled, _ = hustler_positions.shape
-        if len(symbols) != nhustled:
-            raise InputValidationError(
-                "Length of symbols does not match array dimensions"
-            )
-
-        with open( tempfolder.get_abs_path(self._HUSTLER_FILE), 'w') as hustlerfile:
-            for istep, tau_of_t in enumerate(hustler_positions):
-                hustlerfile.write('> {}\n'.format(istep))
-                for symbol, pos in zip(symbols, tau_of_t):
-                    hustlerfile.write('{:<3}   {}\n'.format(symbol, '   '.join(['{:16.10f}'.format(f) for f in pos])))
-
 
         # I put the first-level keys as uppercase (i.e., namelist and card names)
         # and the second-level keys as lowercase
@@ -227,9 +165,6 @@ class HustlerCalculation(PwCalculation):
         input_params['CONTROL']['pseudo_dir'] = self._PSEUDO_SUBFOLDER
         input_params['CONTROL']['outdir'] = self._OUTPUT_SUBFOLDER
         input_params['CONTROL']['prefix'] = self._PREFIX
-        input_params['CONTROL']['lhustle'] = True
-        input_params['CONTROL']['hustler_nat'] = nhustled
-        input_params['CONTROL']['hustlerfile'] = self._HUSTLER_FILE
 
         input_params['CONTROL']['verbosity'] = input_params['CONTROL'].get(
             'verbosity', self._default_verbosity)  # Set to high if not specified
@@ -556,9 +491,6 @@ class HustlerCalculation(PwCalculation):
             with open(exit_filename,'w') as f:
                 f.write('\n')
 
-
-
-
         calcinfo = CalcInfo()
 
         calcinfo.uuid = self.uuid
@@ -589,11 +521,8 @@ class HustlerCalculation(PwCalculation):
         # Retrieve by default the output file and the xml file
         calcinfo.retrieve_list = []
         calcinfo.retrieve_list.append(self._OUTPUT_FILE_NAME)
-        calcinfo.retrieve_list.append(self._VEL_FILE)
-        calcinfo.retrieve_list.append(self._POS_FILE)
-        calcinfo.retrieve_list.append(self._FOR_FILE)
-        calcinfo.retrieve_list.append(self._EVP_FILE)
-        calcinfo.retrieve_list.append(self._DATAFILE_XML)
+        calcinfo.retrieve_list.append(self._PES_FILE)
+
 
         settings_retrieve_list = settings_dict.pop('ADDITIONAL_RETRIEVE_LIST', [])
 

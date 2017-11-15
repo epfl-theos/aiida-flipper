@@ -64,6 +64,17 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
     all_forces_scf = trajectory_scf.get_array('forces')[:, atom_indices_scf,:]
     all_forces_pb = trajectory_pb.get_array('forces')[:, atom_indices_pb,:]
 
+
+    # You need to remove tall the steps that are starting indices due to this stupid thing with the hustler first
+    # step. 
+    starting_indices = set()
+    for traj in (trajectory_pb, trajectory_scf):
+        [starting_indices.add(_) for _ in np.where(trajectory_scf.get_array('steps') == 0)[0]]
+
+    for idx in sorted(starting_indices, reverse=True):
+        all_forces_scf = np.delete(all_forces_scf, idx, axis=0)
+        all_forces_pb  = np.delete(all_forces_pb,  idx, axis=0)
+
     if nsample == None:
         nsample = min((len(all_forces_scf), len(all_forces_pb)))
 
@@ -80,8 +91,8 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
         mae_f = float(mae)
     except:
         mae_f = None
-    print coefs
-    return {'coefficients':ParameterData(dict=dict(coefs=coefs.tolist(), mae=mae_f, nr_of_coefs=len(coefs)))}
+
+    return {'coefficients':ParameterData(dict=dict(coefs=coefs.tolist(), mae=mae_f, nr_of_coefs=len(coefs), indices_removed=sorted(starting_indices)))}
 
 class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
     def start(self):
@@ -91,7 +102,7 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
 
         self.inp.structure
         self.inp.remote_folder_flipper
-        self.inp.electron_parameters
+        # self.inp.electron_parameters
         self.inp.parameters
         # self.inp.flipper_code
         self.inp.pseudo_Li
@@ -234,9 +245,18 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             parameters=own_inputs['parameters_flipper'],
             remote_folder=self.inp.remote_folder_flipper,
         )
-        pseudos = {k:v for k,v in own_inputs.items() if k.startswith('pseudo')}
-        inputs_dft.update(pseudos)
-        inputs_flipper.update(pseudos)
+
+        pseudos_dft = {}
+        pseudos_flipper = {}
+
+        for s in own_inputs['structure'].get_site_kindnames():
+            # Logic: If I specified a pseudo specifically for the use in only DFT or only flipper part, I pass
+            # it with _dft or _flipper. That will be taken by default
+            pseudos_dft['pseudo_{}'.format(s)] = own_inputs.get('pseudo_{}_dft'.format(s), None) or own_inputs['pseudo_{}'.format(s)]
+            pseudos_flipper['pseudo_{}'.format(s)] = own_inputs.get('pseudo_{}_flipper'.format(s), None) or own_inputs['pseudo_{}'.format(s)]
+
+        inputs_dft.update(pseudos_dft)
+        inputs_flipper.update(pseudos_flipper)
 
         if own_parameters['use_same_settings']:
             inputs_dft['settings'] = own_inputs['settings']
@@ -260,7 +280,11 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             inputs_flipper['code'] = own_inputs['flipper_code']
 
         self.goto(self.analyze)
-        return {'hustler_flipper':ReplayCalculation(**inputs_flipper), 'hustler_dft':ReplayCalculation(**inputs_dft)}
+        
+        ret = {'hustler_flipper':ReplayCalculation(**inputs_flipper), 'hustler_dft':ReplayCalculation(**inputs_dft)}
+        ret['hustler_flipper'].label = own_inputs['structure'].label+'_hustler_flipper'
+        ret['hustler_dft'].label = own_inputs['structure'].label+'_hustler_DFT'
+        return ret
 
     def analyze(self):
         # TODO: Implement the analysis of how far the hustler reached! and relaunch if necessary!
@@ -287,7 +311,7 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
             symbol=parameters_d['pinball_kind_symbol'],
             stepsize=1,
             nsample=self.ctx.nstep-1, # starting at 1!
-            starting_point=1,
+            starting_point=0, # The first step is cut within the function!
             divide_r2=parameters_d['divide_r2']
         )
         calc, res = get_pinball_factors_inline(

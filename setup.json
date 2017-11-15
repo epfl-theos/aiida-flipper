@@ -17,12 +17,14 @@
     "entry_points": {
         "aiida.calculations": [
             "quantumespresso.flipper = aiida_flipper.calculations.flipper:FlipperCalculation",
+            "quantumespresso.pes = aiida_flipper.calculations.pes:PesCalculation",
             "quantumespresso.hustler = aiida_flipper.calculations.hustler:HustlerCalculation",
             "chillstep.branching=aiida_flipper.calculations.branching.BranchingCalculation",
             "chillstep.moldyn=aiida_flipper.calculations.moldyn.MoldynCalculation"
          ],
         "aiida.parsers": [
-            "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser"
+            "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",
+            "quantumespresso.pes = aiida_flipper.parsers.pes:PesParser"
         ]
     }
 }

@@ -129,7 +129,6 @@ def concatenate_trajectory_inline(**kwargs):
     [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
     return {'concatenated_trajectory':traj}
 
-
 @make_inline 
 def get_diffusion_from_msd_inline(**kwargs):
     return get_diffusion_from_msd(**kwargs)

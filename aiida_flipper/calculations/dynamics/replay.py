@@ -51,6 +51,8 @@ class ReplayCalculation(ChillstepCalculation):
         self.ctx.iteration = 0
         # TODO, you could potentially change that in the future
         self.ctx.restart_from = None
+        #~ if moldyn_parameters_d.get('is_hustler', False):
+            #~ self.ctx.array_splitting_indices = []
 
 
     def run_calculation(self):
@@ -86,10 +88,10 @@ class ReplayCalculation(ChillstepCalculation):
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
         if moldyn_parameters_d.get('is_hustler', False):
-            # If I have done steps, I need to produce a new array for the positions,
-            # cutting the steps that I have done!
+
             hustler_positions = self.inputs.hustler_positions
             if self.ctx.steps_done:
+                #~ self.ctx.array_splitting_indices.append(self.ctx.steps_done)
                 inlinec, res = split_hustler_array_inline(
                         array=hustler_positions,
                         parameters=get_or_create_parameters(dict(index=self.ctx.steps_done)))
@@ -200,6 +202,8 @@ class ReplayCalculation(ChillstepCalculation):
             returnval = {'total_trajectory':d.values()[0]}
         else:
             raise Exception("I found no trajectories produced")
+
+        moldyn_parameters_d = self.inputs.moldyn_parameters.get_dict()
 
         self.goto(self.exit)
         return returnval

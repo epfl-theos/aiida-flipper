@@ -7,7 +7,7 @@ from aiida_quantumespresso.parsers.basic_raw_parser_pw  import convert_qe_time_t
 
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.folder import FolderData
-from aiida.parsers.parser import Parser  # , ParserParamManager
+from aiida.parsers.parser import Parser
 
 from aiida.common.datastructures import calc_states
 from aiida.common.exceptions import UniquenessError
