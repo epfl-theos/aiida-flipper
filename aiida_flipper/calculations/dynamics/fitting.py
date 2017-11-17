@@ -133,7 +133,14 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         rattled_positions = self.start()['rattled_positions']
         nstep = self.ctx.nstep
         remote_folder = self.inp.remote_folder
-        chargecalc, = remote_folder.get_inputs(node_type=CalculationFactory('quantumespresso.pw'))
+        try:
+            chargecalc, = remote_folder.get_inputs(node_type=CalculationFactory('quantumespresso.pw'))
+        except Exception as e:
+            print e
+            # This must have been a copied remote folder
+            chargecalc = remote_folder.inp.copied_remote_folder.inp.remote_folder.inp.remote_folder
+        print chargecalc
+
         structure = self.inp.structure
         pseudofamily = self.inp.parameters.dict.pseudofamily
         pseudos=get_pseudos(structure=structure,pseudo_family_name=pseudofamily)

@@ -1,9 +1,12 @@
-import copy
+import copy, os
 
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 
+
+from aiida.orm.calculation.inline import make_inline
 from aiida.orm.data.parameter import ParameterData
-from aiida.orm import Data, load_node, Calculation
+from aiida.orm import Data, load_node, Calculation, DataFactory
+from aiida.backends.utils import get_authinfo
 from aiida_scripts.database_utils.reuse import get_or_create_parameters
 from aiida.common.datastructures import calc_states
 from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
@@ -18,6 +21,64 @@ CHARGE_PARAMS_DICT = {
         u'nosym': True,
     }
 }
+
+
+def copy_directory(remote_folder, parameters):
+    
+    #~ print remote_folder, parameters
+    RemoteData = DataFactory('remote')
+    params_dict = parameters.get_dict()
+    computer_dest_name = params_dict.get('destination_computer_name',None)
+    if computer_dest_name:
+        computer_dest = Computer.get(computer_dest_name)
+    else:
+        computer_dest = remote_folder.get_computer()
+    t_dest = get_authinfo(computer=computer_dest,
+                          aiidauser=remote_folder.get_user()).get_transport()
+    dest_dir = params_dict['destination_directory']
+    # get the uuid of the parent calculation
+    calc = remote_folder.inp.remote_folder
+    calcuuid = calc.uuid
+    t_source = get_authinfo(computer=remote_folder.get_computer(),
+                            aiidauser=remote_folder.get_user()).get_transport()
+    source_dir = os.path.join(remote_folder.get_remote_path(), calc._OUTPUT_SUBFOLDER)
+
+
+
+    with t_dest, t_source:
+        # build the destination folder
+        t_dest.chdir(dest_dir)
+        # we do the same logic as in the repository and in the working directory,
+        # i.e. we create the final directory where to put the file splitting the
+        # uuid of the calculation
+        t_dest.mkdir(calcuuid[:2], ignore_existing=True)
+        t_dest.chdir(calcuuid[:2])
+        t_dest.mkdir(calcuuid[2:4], ignore_existing=True)
+        t_dest.chdir(calcuuid[2:4])
+        t_dest.mkdir(calcuuid[4:])
+        t_dest.chdir(calcuuid[4:])
+        final_dest_dir = t_dest.getcwd()
+        # copying files!
+        t_source.copy(source_dir, final_dest_dir)
+    return {'copied_remote_folder': RemoteData(computer=computer_dest,
+                                       remote_path=final_dest_dir)}
+@make_inline
+def copy_directory_inline(**kwargs):
+    """
+    Inline calculation to copy the charge density and spin polarization files
+    from a pw calculation
+    :param parameters: ParameterData object with a dictionary of the form
+        {'destination_directory': absolute path of directory where to put the files,
+         'destination_computer_name': name of the computer where to put the file
+                                      (if absent or None, we take the same
+                                      computer as that of remote_folder)
+         }
+    :param remote_folder: the remote folder of the pw calculation
+    :return: a dictionary of the form
+        {'density_remote_folder': RemoteData_object}
+    """
+    return copy_directory(**kwargs)
+
 
 
 class SinglescfCalculation(ChillstepCalculation):
@@ -78,18 +139,23 @@ class SinglescfCalculation(ChillstepCalculation):
 
     def check(self):
         subc = self.out.scf_calculation
+        own_parameters_d = self.inp.parameters.get_dict()
         if subc.get_state() != calc_states.FINISHED:
             raise Exception("My SCF-calculation {} failed".format(subc.uuid))
-        else:
-            try:
-                # Maybe I'm supposed to store the result?
-                g = Group.get_from_string(self.inp.parameters.dict.results_group_name)
-                g.add_nodes(subc.out.remote_folder)
-            except Exception as e:
-                print '!!!!!!!!!', e
-                pass
-            self.goto(self.exit)
-            return {
-                'remote_folder':subc.out.remote_folder # for the restart
-            }
 
+        returnd = {}
+        calc_remote_folder = subc.out.remote_folder
+        if own_parameters_d.get('copy_remote', False):
+            copy_parameters = self.inp.copy_parameters
+            inlinec, res = copy_directory_inline(remote_folder=calc_remote_folder, parameters=self.inp.copy_parameters)
+            returnd['copy_directory'] = inlinec
+            returnd['remote_folder'] = res['copied_remote_folder']
+        else:
+            returnd['remote_folder'] = calc_remote_folder
+
+        if 'results_group_name' in own_parameters_d:
+            g = Group.get_from_string(own_parameters_d['results_group_name'])
+            g.add_nodes(returnd['remote_folder'])
+
+        self.goto(self.exit)
+        return returnd
