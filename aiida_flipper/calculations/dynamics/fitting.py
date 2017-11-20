@@ -65,11 +65,14 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
     all_forces_pb = trajectory_pb.get_array('forces')[:, atom_indices_pb,:]
 
 
-    # You need to remove tall the steps that are starting indices due to this stupid thing with the hustler first
-    # step. 
+    # You need to remove all the steps that are starting indices due to this stupid thing with the hustler first step. 
+    
     starting_indices = set()
     for traj in (trajectory_pb, trajectory_scf):
         [starting_indices.add(_) for _ in np.where(trajectory_scf.get_array('steps') == 0)[0]]
+    # You also need to remove steps for the trajectory_scf that did not SCF CONVERGE!!!!
+    convergence = trajectory_scf.get_array('scf_convergence')
+    [starting_indices.add(_) for _ in np.where(~convergence)[0]]
 
     for idx in sorted(starting_indices, reverse=True):
         all_forces_scf = np.delete(all_forces_scf, idx, axis=0)

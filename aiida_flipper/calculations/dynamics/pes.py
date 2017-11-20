@@ -94,6 +94,7 @@ class PesCalculation(ChillstepCalculation):
                 calc.use_pseudo(v, k.replace('pseudo_',''))
 
         calc.set_resources(dict(num_machines=charge_calc.get_resources()['num_machines']))
+        calc.add_link_from(self.inp.remote_folder, label='remote_folder')
         calc.set_max_wallclock_seconds(own_parametes_d['max_seconds'])
         calc.use_kpoints(self.inp.kpoints)
         calc.use_parameters(get_or_create_parameters(parameters_d, store=True))
@@ -104,7 +105,7 @@ class PesCalculation(ChillstepCalculation):
 
     def analyze(self):
         calc = self.out.pes_calculation
-        if calc.get_state() != calc_state.FINISHED:
+        if calc.get_state() != calc_states.FINISHED:
             raise Exception("My PesCalculation ( {} ) did end up in state {}".format(calc.pk, calc.get_state()))
         own_parametes_d = self.inp.parameters.get_dict()
         retrieved = calc.out.retrieved

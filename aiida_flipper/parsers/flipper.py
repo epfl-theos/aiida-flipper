@@ -78,6 +78,10 @@ POS_BLOCK_REGEX = re.compile("""
 ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?)+\s*)+
 """, re.X | re.M)
 
+
+F90_BOOL_DICT = {'T':True, 'F':False}
+
+
 class FlipperParser(Parser):
     def parse_with_retrieved(self, retrieved):
 
@@ -225,6 +229,13 @@ class FlipperParser(Parser):
                             scalar_quantities[iline, ival] = np.nan
                 # print scalar_quantities[-1,:]
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
+
+        # Reading the convergence in a different loop
+        with open(evp_file) as f:
+            try:
+                convergence = np.array([F90_BOOL_DICT[line.split()[8]] for line in f.readlines()])
+            except Exception as e:
+                print e
 
 
 
@@ -402,6 +413,8 @@ class FlipperParser(Parser):
         trajectory_data.set_array('walltimes', walltimes)
         trajectory_data._set_attr('units|walltimes', 's')
 
+        # SCF convergence
+        trajectory_data.set_array('scf_convergence', convergence)
         ## DONE
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
