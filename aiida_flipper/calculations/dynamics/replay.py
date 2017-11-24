@@ -13,7 +13,7 @@ from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
 import numpy as np
 
-
+NTRIALS = 8
 
 
 def get_completed_number_of_steps(calc):
@@ -140,9 +140,8 @@ class ReplayCalculation(ChillstepCalculation):
                 backoff_counter = self.ctx.backoff_counter
             except AttributeError:
                 backoff_counter = 0
-            ntrials = 2
-            if backoff_counter > ntrials:
-                raise Exception("My last calculation {} did not finish, and I used my {} trials up!".format(lastcalc, ntrials))
+            if backoff_counter > NTRIALS:
+                raise Exception("My last calculation {} did not finish, and I used my {} trials up!".format(lastcalc, NTRIALS))
             try:
                 self.ctx.restart_from
             except:
