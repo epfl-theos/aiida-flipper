@@ -186,8 +186,8 @@ def get_diffusion_from_msd(structure, parameters, **trajectories):
     ta.set_trajectories(
             trajectories, # velocities=velocities if plot else None,
             pos_units=units_positions, # vel_units=units_velocities,
-            timestep_in_fs=timestep_fs, recenter=True,) # parameters_d.pop('recenter', False) Always recenter
-    print parameters
+            timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
+
     res, arr = ta.get_msd(**parameters_d)
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)

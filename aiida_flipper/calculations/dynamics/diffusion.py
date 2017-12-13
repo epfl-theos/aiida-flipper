@@ -34,6 +34,7 @@ class DiffusionCalculation(ChillstepCalculation):
         lastcalc = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))))
         if lastcalc.get_state() == 'FAILED':
             raise Exception("Last branch {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
+
         if minimum_nr_of_branching > self.ctx.branching_counter:
             # I don't even care, I just launch the next!
             self.goto(self.launch_branching)
@@ -50,15 +51,27 @@ class DiffusionCalculation(ChillstepCalculation):
                     parameters=msd_parameters,
                     **branches)['msd_results']
             sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
+            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
+            sem_relative = sem / mean_d
             sem_target = diffusion_parameters_d['sem_threshold']
-            if sem < sem_target: #msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s'] < diffusion_parameters_d['sem_threshold']:
-            #if msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s'] < diffusion_parameters_d['sem_threshold']:
+            sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
+            #~ print mean_d, sem/mean_d
+            #~ return
+            if sem < sem_target:
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
+                print "The error ( {} ) is below the target value ( {} )".format(sem, sem_target)
                 self.goto(self.collect)
+            elif sem_relative < sem_relative_target:
+                # the relative error is below my targe value
+                print "The relative error ( {} ) is below the target value ( {} )".format(sem_relative, sem_relative_target)
+                self.goto(self.collect)
+
             else:
-                self.add_comment('SEM so far is {}, below target value of {}, branching more!'.format(sem, sem_target), user=USER)
-                # Not converged, launch more
+                print "The error has not converged"
+                print "absolute sem: {:.5e}  Target: {:.5e}".format(sem, sem_target)
+                print "relative sem: {:.5e}  Target: {:.5e}".format(sem_relative, sem_relative_target)
                 self.goto(self.launch_branching)
+
     def launch_branching(self):
         # Get the last calculation!
         # Make a new settings object to restart from the last configurations
@@ -66,10 +79,7 @@ class DiffusionCalculation(ChillstepCalculation):
 
         inp_d = self.get_inputs_dict()
         diffusion_parameters_d = inp_d.pop('diffusion_parameters').get_dict()
-        print inp_d.keys()
-
         nvt_replay = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))).out.slave_NVT
-
         kwargs = dict(trajectory=nvt_replay.out.total_trajectory,
                     parameters=get_or_create_parameters(dict(
                         step_index=-1,
@@ -83,8 +93,6 @@ class DiffusionCalculation(ChillstepCalculation):
             pass # settings will be None
 
         inlinec, res = get_structure_from_trajectory_inline(**kwargs)
-
-
         inp_d.pop('msd_parameters')
         inp_d.pop('moldyn_parameters_thermalize')
         inp_d.pop('parameters_thermalize')
