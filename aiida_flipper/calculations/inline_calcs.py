@@ -95,39 +95,30 @@ def get_structure_from_trajectory_inline(trajectory, parameters, structure=None,
 
 
 
+
+def concatenate_trajectory(**kwargs):
+    for k, v in kwargs.iteritems():
+        if not isinstance(v, TrajectoryData):
+            raise Exception("All my inputs have to be instances of TrajectoryData")
+    sorted_trajectories = zip(*sorted(kwargs.items()))[1]
+    # I assume they store the same arrays!
+    arraynames = sorted_trajectories[0].get_arraynames()
+    traj = TrajectoryData()
+    for arrname in arraynames:
+        if arrname in SINGULAR_TRAJ_KEYS:
+            traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
+        else:
+            traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
+    [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
+    return {'concatenated_trajectory':traj}
+    
+
 @optional_inline
 def concatenate_trajectory_optional_inline(**kwargs):
-    for k, v in kwargs.iteritems():
-        if not isinstance(v, TrajectoryData):
-            raise Exception("All my inputs have to be instances of TrajectoryData")
-    sorted_trajectories = zip(*sorted(kwargs.items()))[1]
-    # I assume they store the same arrays!
-    arraynames = sorted_trajectories[0].get_arraynames()
-    traj = TrajectoryData()
-    for arrname in arraynames:
-        if arrname in SINGULAR_TRAJ_KEYS:
-            traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
-        else:
-            traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
-    [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
-    return {'concatenated_trajectory':traj}
-
+    return concatenate_trajectory(**kwargs)
 @make_inline
 def concatenate_trajectory_inline(**kwargs):
-    for k, v in kwargs.iteritems():
-        if not isinstance(v, TrajectoryData):
-            raise Exception("All my inputs have to be instances of TrajectoryData")
-    sorted_trajectories = zip(*sorted(kwargs.items()))[1]
-    # I assume they store the same arrays!
-    arraynames = sorted_trajectories[0].get_arraynames()
-    traj = TrajectoryData()
-    for arrname in arraynames:
-        if arrname in SINGULAR_TRAJ_KEYS:
-            traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
-        else:
-            traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
-    [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
-    return {'concatenated_trajectory':traj}
+    return concatenate_trajectory(**kwargs)
 
 @make_inline 
 def get_diffusion_from_msd_inline(**kwargs):

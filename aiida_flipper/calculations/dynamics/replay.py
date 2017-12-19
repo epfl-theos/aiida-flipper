@@ -57,6 +57,7 @@ class ReplayCalculation(ChillstepCalculation):
 
     def run_calculation(self):
         # create a calculation:
+
         calc = self.inp.code.new_calc()
         moldyn_parameters_d = self.inputs.moldyn_parameters.get_dict()
         max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
