@@ -56,12 +56,14 @@ class LindiffusionCalculation(ChillstepCalculation):
         inp_d.pop('settings', None)
         # Optional remote filder
         ## inp_d.pop('remote_folder', None)
+
+        inp_d.pop('msd_parameters')
+        inp_d.pop('diffusion_parameters')
+        # diffusion_parameters_d = inp_d.pop('diffusion_parameters').get_dict()
+
         if inp_d:
             raise Exception("More keywords provided than needed: {}".format(inp_d.keys()))
 
-
-        diffusion_parameters_d = inp_d.pop('diffusion_parameters').get_dict()
-        inp_d.pop('msd_parameters')
         # The replay Counter counts how many REPLAYS I launched
         self.ctx.replay_counter = 0
 
@@ -100,7 +102,6 @@ class LindiffusionCalculation(ChillstepCalculation):
         inp_d['code'] = Code.get_from_string(self.ctx.code_string)
         inp_d['parameters'] = self.inp.parameters_main
         returnval = {}
-
 
         # Now I'm checking whether I am starting this
         if self.ctx.replay_counter == 0:
@@ -143,8 +144,11 @@ class LindiffusionCalculation(ChillstepCalculation):
 
         repl = ReplayCalculation(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
+        
+        returnval = {'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))):repl}
+        # Last thing I do is set up the counter:
         self.goto(self.check)
-        return {'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))):repl}
+        self.ct.replay_counter += 1
 
 
 
