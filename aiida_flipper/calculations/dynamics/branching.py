@@ -8,7 +8,7 @@ from aiida.orm import Data, load_node, Calculation
 from aiida.common.constants import bohr_to_ang
 from aiida.orm.querybuilder import QueryBuilder
 from aiida.common.links import LinkType
-
+from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
 
 
@@ -94,7 +94,7 @@ class BranchingCalculation(ChillstepCalculation):
                 raise Exception("Thermalizer failed")
             traj = self.out.thermalizer.out.total_trajectory
 
-            kwargs = dict(trajectory=traj, parameters=ParameterData(dict=dict(
+            kwargs = dict(trajectory=traj, parameters=get_or_create_parameters(dict(
                             step_index=-1,
                             recenter=self.inputs.parameters_branching.dict.recenter_before_nvt,
                             create_settings=True,
@@ -140,11 +140,11 @@ class BranchingCalculation(ChillstepCalculation):
         for count, idx in enumerate(indices):
             kwargs = dict(
                     structure=self.inp.structure, trajectory=traj, settings=settings,
-                    parameters=ParameterData(dict=dict(
+                    parameters=get_or_create_parameters(dict(
                             step_index=idx,
                             recenter=self.inputs.parameters_branching.dict.recenter_before_nve,
                             create_settings=True,
-                            complete_missing=True)))
+                            complete_missing=True),store=True))
             inlinec, res = get_structure_from_trajectory_inline(**kwargs)
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']

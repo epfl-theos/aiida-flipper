@@ -1,6 +1,8 @@
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.chillstep.user.dynamics.replay import ReplayCalculation
-from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline
+from aiida_flipper.calculations.inline_calcs import (
+        get_diffusion_from_msd_inline, get_diffusion_from_msd, 
+        get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline)
 from aiida.orm import load_node, Group, Calculation, Code
 from aiida.orm.querybuilder import QueryBuilder
 from aiida.common.links import LinkType
@@ -16,7 +18,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         if diffusion_parameters_d is None:
             diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
         return getattr(self.out, 
-            'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))))
+            'replay_{}'.format(str(self.ctx.replay_counter-1).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))))
 
     def start(self):
         # Now, I start by checking that I have all the parameters I need
@@ -122,12 +124,13 @@ class LindiffusionCalculation(ChillstepCalculation):
             inp_d['structure'] = self.inputs.structure
             inp_d['settings'] = self.inp.settings
         else:
-            kwargs = dict(trajectory=traj, parameters=ParameterData(dict=dict(
+            kwargs = dict(trajectory=last_calc.out.total_trajectory, parameters=get_or_create_parameters(dict(
                             step_index=-1,
-                            recenter=self.inputs.parameters_branching.dict.recenter_before_nvt,
+                            recenter=False, #self.inputs.parameters_branching.dict.recenter_before_nvt,
                             create_settings=True,
-                            complete_missing=True)),
-                    structure=self.inp.structure)
+                            complete_missing=False), store=True),
+                    # structure=self.inp.structure
+                )
 
             try:
                 kwargs['settings'] = self.inp.settings
@@ -138,17 +141,13 @@ class LindiffusionCalculation(ChillstepCalculation):
             returnval['get_structure'] = inlinec
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']
-
-
-
-
         repl = ReplayCalculation(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
-        
         returnval = {'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))):repl}
         # Last thing I do is set up the counter:
         self.goto(self.check)
-        self.ct.replay_counter += 1
+        self.ctx.replay_counter += 1
+        return returnval
 
 
 
@@ -169,12 +168,12 @@ class LindiffusionCalculation(ChillstepCalculation):
             self.goto(self.collect)
         else:
             # Now let me calculate the diffusion coefficient that I get:
-            trajectories = self._get_trajectories()
+            concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
             # I estimate the diffusion coefficients: without storing
             msd_results = get_diffusion_from_msd(
                     structure=self.inputs.structure,
                     parameters=msd_parameters,
-                    **trajectories)['msd_results']
+                    trajectory=concatenated_trajectory)['msd_results']
             sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
             mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
             sem_relative = sem / mean_d
@@ -200,33 +199,38 @@ class LindiffusionCalculation(ChillstepCalculation):
 
     def collect(self):
         msd_parameters =  self.inputs.msd_parameters
-        trajectories = self._get_trajectories()
-        c, res = get_diffusion_from_msd_inline(
+        c1, res1 = concatenate_trajectory_inline(**self._get_trajectories())
+        concatenated_trajectory = res1['concatenated_trajectory']
+
+        c2, res2 = get_diffusion_from_msd_inline(
                     structure=self.inputs.structure,
                     parameters=msd_parameters,
-                    **trajectories)
+                    trajectory=concatenated_trajectory)
 
         try:
             # Maybe I'm supposed to store the result?
             g = Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
-            g.add_nodes(res['msd_results'])
+            g.add_nodes(res2['msd_results'])
         except Exception as e:
             pass
 
-        res['get_diffusion'] = c
+
+        res2['get_diffusion'] = c2
+        res2['concatenate_trajectory'] = c1
+        res2.update(res1)
         self.goto(self.exit)
-        return res
+        return res2
 
     def _get_trajectories(self):
         qb = QueryBuilder()
         qb.append(LindiffusionCalculation, filters={'id':self.id}, tag='ldc')
         qb.append(ReplayCalculation, 
-                output_of='b',
+                output_of='ldc',
                 edge_project='label',
                 edge_filters={'type':LinkType.CALL.value, 'label':{'like':'replay_%'}}, 
                 tag='repl', edge_tag='mb')
         qb.append(
-                TrajectoryData, output_of='c',
+                TrajectoryData, output_of='repl',
                 edge_filters={'type':LinkType.RETURN.value, 'label':'total_trajectory'},
                 project='*', tag='t')
         return {'{}'.format(item['mb']['label']):item['t']['*'] for item in qb.iterdict()}
