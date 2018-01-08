@@ -141,6 +141,10 @@ class LindiffusionCalculation(ChillstepCalculation):
             returnval['get_structure'] = inlinec
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']
+            # I have to set the parameters so that they read from input!
+            params_for_calculation_d = inp_d['parameters'].get_dict()
+            params_for_calculation_d['IONS']['ion_velocities'] = 'from_input'
+            inp_d['parameters'] = get_or_create_parameters(params_for_calculation_d, store=True)
         repl = ReplayCalculation(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
         returnval = {'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))):repl}
@@ -148,8 +152,6 @@ class LindiffusionCalculation(ChillstepCalculation):
         self.goto(self.check)
         self.ctx.replay_counter += 1
         return returnval
-
-
 
 
     def check(self):
