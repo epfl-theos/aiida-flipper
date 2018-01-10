@@ -223,6 +223,17 @@ class LindiffusionCalculation(ChillstepCalculation):
         self.goto(self.exit)
         return res2
 
+    def show_msd_now_nosave(self, **kwargs):
+        from aiida.orm.data.parameter import ParameterData
+        msd_parameters_d =  self.inputs.msd_parameters.get_dict()
+        msd_parameters_d.update(kwargs)
+        concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
+        # I estimate the diffusion coefficients: without storing
+        get_diffusion_from_msd(
+                structure=self.inputs.structure,
+                parameters=ParameterData(dict=msd_parameters_d),
+                trajectory=concatenated_trajectory, plot_and_exit=True)
+
     def _get_trajectories(self):
         qb = QueryBuilder()
         qb.append(LindiffusionCalculation, filters={'id':self.id}, tag='ldc')

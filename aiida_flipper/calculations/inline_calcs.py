@@ -124,7 +124,7 @@ def concatenate_trajectory_inline(**kwargs):
 def get_diffusion_from_msd_inline(**kwargs):
     return get_diffusion_from_msd(**kwargs)
 
-def get_diffusion_from_msd(structure, parameters, **trajectories):
+def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
 
     from aiida.common.constants import timeau_to_sec
     from mdtools.libs.mdlib.trajectory_analysis import TrajectoryAnalyzer
@@ -180,6 +180,9 @@ def get_diffusion_from_msd(structure, parameters, **trajectories):
             timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
 
     res, arr = ta.get_msd(**parameters_d)
+    if plot_and_exit:
+        ta.plot_results()
+        return
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
     arr_data.set_array('msd', arr)
@@ -188,6 +191,11 @@ def get_diffusion_from_msd(structure, parameters, **trajectories):
         arr_data._set_attr(k,v)
 
     return {'msd_results':arr_data}
+
+
+@make_inline
+def get_diffusion_decomposed_from_msd_inline(**kwargs):
+    return get_diffusion_decomposed_from_msd(**kwargs)
 
 def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
 
@@ -244,19 +252,18 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
             pos_units=units_positions, # vel_units=units_velocities,
             timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
 
-    res, arr = ta.get_msd_decomposed(**parameters_d)
-    ta.plot_results()
-    print res
-    return
-    #~ res, arr = ta.get_msd_decomposed(**parameters_d)
+    res, arr = ta.get_msd_decomposed(only_means=True, **parameters_d)
+    #~ ta.get_msd(**parameters_d)
+    #~ ta.plot_results()
+
+
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
-    arr_data.set_array('msd', arr)
+    arr_data.set_array('msd_decomposed', arr)
     arr_data._set_attr('species_of_interest', species_of_interest)
     for k,v in res.items():
         arr_data._set_attr(k,v)
-
-    return {'msd_results':arr_data}
+    return {'msd_decomposed_results':arr_data}
 
 
 
