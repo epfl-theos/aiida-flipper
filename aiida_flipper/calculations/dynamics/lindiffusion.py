@@ -196,7 +196,7 @@ class LindiffusionCalculation(ChillstepCalculation):
                 print "The error has not converged"
                 print "absolute sem: {:.5e}  Target: {:.5e}".format(sem, sem_target)
                 print "relative sem: {:.5e}  Target: {:.5e}".format(sem_relative, sem_relative_target)
-                self.goto(self.launch_branching)
+                self.goto(self.run_replays)
 
 
     def collect(self):
