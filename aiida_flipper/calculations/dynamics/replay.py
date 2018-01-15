@@ -2,7 +2,7 @@ from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import InlineCalculation, make_inline
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.array import ArrayData
-from aiida.orm import Data, load_node, Calculation
+from aiida.orm import Data, load_node, Calculation, Code
 #~ from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.querybuilder import QueryBuilder
@@ -58,9 +58,17 @@ class ReplayCalculation(ChillstepCalculation):
     def run_calculation(self):
         # create a calculation:
 
-        calc = self.inp.code.new_calc()
+        try:
+            code = self.inp.code
+        except AttributeError:
+            code = Code.get_from_string(self.ctx.code_string)
+        calc = code.new_calc()
         moldyn_parameters_d = self.inputs.moldyn_parameters.get_dict()
-        max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
+        try:
+            max_wallclock_seconds = self.ctx.walltime_seconds
+        except (AttributeError, KeyError):
+            max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
+
         for linkname, input_node in self.get_inputs_dict().iteritems():
             if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
                 continue
@@ -76,7 +84,11 @@ class ReplayCalculation(ChillstepCalculation):
         # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
         input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9)) 
         # set the resources:
-        calc.set_resources(self.inputs.moldyn_parameters.dict.resources)
+        try:
+            resources = {"num_machines":self.ctx.num_machines}
+        except (KeyError, AttributeError):
+            resources = self.inputs.moldyn_parameters.dict.resources
+        calc.set_resources(resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
         try:
             # There's something very strange going on: This works only for flipper, not for Hustler! Why???

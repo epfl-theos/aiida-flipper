@@ -97,11 +97,11 @@ class LindiffusionCalculation(ChillstepCalculation):
         inp_d = {k:v for k,v in self.get_inputs_dict().items() if not 'parameters' in k}
         # These are the right parameters:
 
-        moldyn_params_d = self.inp.moldyn_parameters_main.get_dict()
-        moldyn_params_d['max_wallclock_seconds'] = self.ctx.walltime_seconds
-        moldyn_params_d['resources'] = {'num_machines':self.ctx.num_machines}
-        inp_d['moldyn_parameters'] = get_or_create_parameters(moldyn_params_d, store=True)
-        inp_d['code'] = Code.get_from_string(self.ctx.code_string)
+        #~ moldyn_params_d = self.inp.moldyn_parameters_main.get_dict()
+        #~ moldyn_params_d['max_wallclock_seconds'] = self.ctx.walltime_seconds
+        #~ moldyn_params_d['resources'] = {'num_machines':self.ctx.num_machines}
+        inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_main # get_or_create_parameters(moldyn_params_d, store=True)
+        #~ inp_d['code'] = Code.get_from_string(self.ctx.code_string)
         inp_d['parameters'] = self.inp.parameters_main
         returnval = {}
 
@@ -147,6 +147,9 @@ class LindiffusionCalculation(ChillstepCalculation):
             inp_d['parameters'] = get_or_create_parameters(params_for_calculation_d, store=True)
         repl = ReplayCalculation(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
+        for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
+            repl._set_attr(attr_key , self.get_attr(attr_key))
+        #~ moldyn_params_d['resources'] = {'num_machines':self.ctx.num_machines
         returnval = {'replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])),str(0))):repl}
         # Last thing I do is set up the counter:
         self.goto(self.check)
@@ -163,7 +166,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         if lastcalc.get_state() == 'FAILED':
             raise Exception("Last replay {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
 
-        if minimum_nr_of_replays >= self.ctx.replay_counter:
+        if minimum_nr_of_replays > self.ctx.replay_counter:
             # I don't even care, I just launch the next!
             self.goto(self.run_replays)
         elif diffusion_parameters_d['max_nr_of_replays'] <= self.ctx.replay_counter:
