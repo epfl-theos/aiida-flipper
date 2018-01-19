@@ -82,7 +82,10 @@ class ReplayCalculation(ChillstepCalculation):
         else:
             input_dict['CONTROL']['nstep'] = self.ctx.steps_todo
         # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
-        input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9)) 
+        input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9))
+        if not input_dict['CONTROL'].get('lflipper', False):
+            input_dict['IONS']['wfc_extrapolation'] = 'second_order'
+            input_dict['IONS']['pot_extrapolation'] = 'second_order'
         # set the resources:
         try:
             resources = {"num_machines":self.ctx.num_machines}
