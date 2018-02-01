@@ -53,7 +53,11 @@ class PesCalculation(ChillstepCalculation):
         pes_density = own_parametes_d['pes_density']
         calc.use_structure(pes_structure)
         calc.use_settings(self.inp.settings)
-        charge_calc, = self.inp.remote_folder.get_inputs(node_type=PwCalculation)
+        try:
+            charge_calc, = self.inp.remote_folder.get_inputs(node_type=PwCalculation)
+        except ValueError:
+            # For the newer system where I have copied the charge density folder!
+            charge_calc = self.inp.remote_folder.inp.copied_remote_folder.inp.remote_folder.inp.remote_folder
         charge_params = charge_calc.inp.parameters.get_dict()
 
         parameters_d = {
