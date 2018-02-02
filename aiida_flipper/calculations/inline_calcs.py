@@ -165,7 +165,6 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     if timesteps_set:
         timesteps_set.add(timestep_fs)
         raise Exception("Multiple timesteps {}".format(timesteps_set))
-
     # I work with fs, not QE units!
     #~ timestep_fs = timestep
     equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
@@ -180,6 +179,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
             timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
 
     res, arr = ta.get_msd(**parameters_d)
+    #~ print res["Li"]["diffusion_sem_cm2_s"]
     if plot_and_exit:
         ta.plot_results()
         return

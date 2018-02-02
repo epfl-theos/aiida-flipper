@@ -168,11 +168,14 @@ class LindiffusionCalculation(ChillstepCalculation):
 
         if minimum_nr_of_replays > self.ctx.replay_counter:
             # I don't even care, I just launch the next!
+            print 'Did not run enough'
             self.goto(self.run_replays)
         elif diffusion_parameters_d['max_nr_of_replays'] <= self.ctx.replay_counter:
+            print 'Cannot run more'
             self.goto(self.collect)
         else:
             # Now let me calculate the diffusion coefficient that I get:
+            #~ print len(self._get_trajectories())
             concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
             # I estimate the diffusion coefficients: without storing
             msd_results = get_diffusion_from_msd(
@@ -184,7 +187,7 @@ class LindiffusionCalculation(ChillstepCalculation):
             sem_relative = sem / mean_d
             sem_target = diffusion_parameters_d['sem_threshold']
             sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
-            #~ print mean_d, sem/mean_d
+            print mean_d, sem/mean_d, sem
             #~ return
             if sem < sem_target:
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
