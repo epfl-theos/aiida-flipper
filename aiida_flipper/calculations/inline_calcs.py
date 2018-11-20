@@ -3,11 +3,53 @@ from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array import ArrayData
 from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.data.parameter import ParameterData
-
+from math import ceil as math_ceil
 import numpy as np
 
 SINGULAR_TRAJ_KEYS = ('symbols','atomic_species_name')
 
+@optional_inline
+def remove_lithium_from_structure_inline(structure, parameters):
+    parameters_d =  parameters.get_dict()
+    
+    element = parameters_d['element']
+    atoms = structure.get_ase()
+    indices_potential_removal = [i for i,s in enumerate(atoms.get_chemical_symbols()) if s==element]
+    nat_rem = len(indices_potential_removal)
+
+    if not indices_potential_removal:
+        raise RuntimeError("There are no atoms to remove")
+
+    
+    if 'nr_removals' in parameters_d and 'fractional_removal' in parameters_d:
+        raise RuntimeError("Both fraction and number specified")
+    if 'nr_removals' in parameters_d:
+        nr_removals = parameters_d['nr_removals']
+        assert 0 < nr_removals <= nat_rem, "Number of removals is either to small or too large (or not an integer?)"
+    elif 'fractional_removal' in parameters_d:
+        frac = parameters_d['fractional_removal']
+        assert 0< frac < 1.0, "Fraction should be 0<frac<1"
+        # If given a percentage, I will remove up to the next integer number
+        nr_removals = int(math_ceil(frac*nat_rem))
+        if nr_removals == nat_rem:
+            return None # Cannot return a structure that is fully delithaited.
+    else:
+        raise RuntimeError("No fraction of number of specified")
+
+    # I use np.random.choice to get nr_removals random selections from the list, without replacement
+    indices_to_remove = np.random.choice(indices_potential_removal, nr_removals, replace=False)
+    # I need to reverse-order that list to move from the bottom of the list,
+    # Otherwise the indices will be messed up!
+    sorted_indices_to_remove = sorted(indices_to_remove, reverse=True)
+    for index_to_pop in sorted_indices_to_remove:
+        atoms.pop(index_to_pop)
+    comp1 = structure.get_composition()
+    partially_delithiated = structure=StructureData(ase=atoms)
+    partially_delithiated._set_attr('indices_{}_removed'.format(element), sorted_indices_to_remove)
+    comp2 = partially_delithiated.get_composition()
+    assert comp1.pop(element) != comp2.pop(element), "No {} was removed".format(element)
+    assert comp1 == comp2, "composition neglecting element to remove do not match"
+    return dict(structure=partially_delithiated)
 
 @make_inline
 def get_structure_from_trajectory_inline(trajectory, parameters, structure=None, settings=None):
@@ -92,6 +134,9 @@ def get_structure_from_trajectory_inline(trajectory, parameters, structure=None,
         return_dict['settings'] = ParameterData(dict=settings_d)
 
     return return_dict
+
+
+
 
 
 

@@ -35,8 +35,6 @@ def rattle_randomly_structure_inline(structure, parameters):
     indices_to_rattle = [i for i,k in enumerate(structure.get_site_kindnames()) if k in elements_to_rattle]
     positions = structure.get_ase().positions
     new_positions = np.repeat(np.array([positions]), nr_of_configurations, axis=0)
-
-
     for idx in indices_to_rattle:
         new_positions[:,idx,:] += np.random.normal(0, stdev, (nr_of_configurations, 3))
 

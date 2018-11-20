@@ -166,7 +166,15 @@ class LindiffusionCalculation(ChillstepCalculation):
         if lastcalc.get_state() == 'FAILED':
             raise Exception("Last replay {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
 
-        if minimum_nr_of_replays > self.ctx.replay_counter:
+        try:
+            user_wants_termination = self.ctx.force_termination
+        except AttributeError:
+            user_wants_termination = False
+
+        if user_wants_termination:
+            print 'User wishes termination'
+            self.goto(self.collect)
+        elif minimum_nr_of_replays > self.ctx.replay_counter:
             # I don't even care, I just launch the next!
             print 'Did not run enough'
             self.goto(self.run_replays)
