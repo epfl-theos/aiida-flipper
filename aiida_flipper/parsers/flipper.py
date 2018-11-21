@@ -78,6 +78,16 @@ POS_BLOCK_REGEX = re.compile("""
 ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?)+\s*)+
 """, re.X | re.M)
 
+STRESS_REGEX = re.compile("""
+    total\s+stress.*[\n]
+    (?P<vals>((\s+ ([\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? ) ){6}[\n]){3})
+    """, re.X|re.M)
+
+          #~ total   stress  (Ry/bohr**3)                   (kbar)     P=    0.06
+   #~ 0.00000164   0.00000126  -0.00000083          0.24      0.19     -0.12
+   #~ 0.00000126  -0.00000004  -0.00000103          0.19     -0.01     -0.15
+  #~ -0.00000083  -0.00000103  -0.00000034         -0.12     -0.15     -0.05
+
 
 F90_BOOL_DICT = {'T':True, 'F':False}
 
@@ -149,7 +159,6 @@ class FlipperParser(Parser):
             out_folder.get_abs_path('.'),
             self._calc._OUTPUT_FILE_NAME
         )
-
         with open(out_file) as f:
             txt = f.read()
             #~ warnings, fatality = get_warnings(txt)
@@ -168,8 +177,26 @@ class FlipperParser(Parser):
                 nstep = get_nstep_from_outputf(txt)
             except:
                 nstep = -1
-            del txt
+            if input_dict['CONTROL'].get('tstress', False):
+                print 'reading stresses'
+                stresses = list()
+                iprint = input_dict['CONTROL'].get('iprint', 1)
+                # I implement reading every iprint value only, to be consistent with
+                # everything else being printed
+                for imatch, match in enumerate(STRESS_REGEX.finditer(txt)):
+                    if imatch % iprint:
+                        continue
+                    stress_vals = match.group('vals').split('\n')
+                    stress = np.empty((3,3))
+                    for i in range(3):
+                        stress[i, :] = stress_vals[i].split()[:3]
+                    stresses.append(stress)
+                stresses = np.array(stresses)
+                print stresses.shape
+            else:
+                stresses = None
 
+            del txt
 
         #~ if nstep==0:
             #~ successful = False
@@ -415,6 +442,11 @@ class FlipperParser(Parser):
 
         # SCF convergence
         trajectory_data.set_array('scf_convergence', convergence)
+
+        # STRESSES
+        if stresses is not None:
+            trajectory_data._set_attr('units|stresses', 'atomic')
+            trajectory_data.set_array('stresses', stresses)
         ## DONE
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
