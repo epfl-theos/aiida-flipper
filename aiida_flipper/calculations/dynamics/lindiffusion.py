@@ -1,15 +1,22 @@
+
+from aiida.backends.utils import get_automatic_user
+
+from aiida.common.links import LinkType
+
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.chillstep.user.dynamics.replay import ReplayCalculation
+
+
+from aiida.orm import load_node, Group, Calculation, Code
+from aiida.orm.querybuilder import QueryBuilder
+from aiida.orm.data.array.trajectory import TrajectoryData
+
 from aiida_flipper.calculations.inline_calcs import (
         get_diffusion_from_msd_inline, get_diffusion_from_msd, 
         get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline)
-from aiida.orm import load_node, Group, Calculation, Code
-from aiida.orm.querybuilder import QueryBuilder
-from aiida.common.links import LinkType
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
-from aiida.backends.utils import get_automatic_user
+from aiida_flipper.utils import get_or_create_parameters
+
 USER = get_automatic_user()
 
 class LindiffusionCalculation(ChillstepCalculation):

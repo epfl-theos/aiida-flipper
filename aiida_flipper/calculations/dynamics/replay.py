@@ -1,15 +1,16 @@
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-from aiida.orm.calculation.inline import InlineCalculation, make_inline
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm.data.array import ArrayData
-from aiida.orm import Data, load_node, Calculation, Code
-#~ from aiida.orm.data.structure import StructureData
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm.querybuilder import QueryBuilder
+
 from aiida.common.datastructures import calc_states
 from aiida.common.links import LinkType
+from aiida.orm import Data, load_node, Calculation, Code
+from aiida.orm.calculation.chillstep import ChillstepCalculation
+from aiida.orm.calculation.inline import InlineCalculation, make_inline
+from aiida.orm.data.array import ArrayData
+from aiida.orm.data.array.trajectory import TrajectoryData
+from aiida.orm.data.parameter import ParameterData
+from aiida.orm.querybuilder import QueryBuilder
+
 from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, get_structure_from_trajectory_inline
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
+from aiida_flipper.utils import get_or_create_parameters
 
 import numpy as np
 

@@ -1,12 +1,14 @@
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-from aiida.orm.data.parameter import ParameterData
+
+
 from aiida.orm import Data, load_node, Calculation, CalculationFactory, Group
+from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import optional_inline, make_inline
 from aiida.orm.data.array import ArrayData
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
-from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
-import numpy as np, copy
+from aiida.orm.data.parameter import ParameterData
 
+from aiida_flipper.utils import (get_or_create_parameters, get_pseudos, get_suggested_cutoff)
+
+import numpy as np, copy
 from replay import ReplayCalculation
 
 HUSTLER_DFT_PARAMS_DICT = {
@@ -49,7 +51,7 @@ def rattle_randomly_structure_inline(structure, parameters):
 
 @make_inline
 def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
-    from aiida_scripts.fitting.fit_forces import Force, fit_with_lin_reg, make_fitted, plot_forces
+    from aiida_flipper.utils import Force, fit_with_lin_reg, make_fitted, plot_forces
     params_dict = parameters.get_dict()
     starting_point = params_dict['starting_point']
     stepsize = params_dict['stepsize']
@@ -84,7 +86,7 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
     forces_pb = Force(all_forces_pb[starting_point:starting_point+nsample*stepsize:stepsize])
 
     coefs, mae = fit_with_lin_reg(forces_scf, forces_pb,
-            fit_forces=True, verbosity=0, divide_r2=params_dict['divide_r2'], signal_indices=signal_indices)
+            verbosity=0, divide_r2=params_dict['divide_r2'], signal_indices=signal_indices)
 
     #~ pb_fitted = make_fitted(forces_pb, coefs=coefs, signal_indices=signal_indices)
     #~ plot_forces((forces_scf, pb_fitted))

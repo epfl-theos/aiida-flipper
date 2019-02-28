@@ -1,13 +1,15 @@
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-from aiida.orm.calculation.chillstep.user.dynamics.branching import BranchingCalculation
-from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline
-from aiida.orm import load_node, Group
-from aiida.orm.querybuilder import QueryBuilder
-from aiida.common.links import LinkType
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
 from aiida.backends.utils import get_automatic_user
+
+from aiida.common.links import LinkType
+from aiida.orm import load_node, Group
+from aiida.orm.data.array.trajectory import TrajectoryData
+from aiida.orm.calculation.chillstep import ChillstepCalculation
+from aiida.orm.calculation.chillstep.user.dynamics.branching import BranchingCalculation
+from aiida.orm.querybuilder import QueryBuilder
+from aiida_flipper.utils import get_or_create_parameters
+from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline
+
 USER = get_automatic_user()
 
 class DiffusionCalculation(ChillstepCalculation):

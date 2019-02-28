@@ -1,27 +1,25 @@
 import copy
 
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm import Data, load_node, Calculation
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
 from aiida.common.datastructures import calc_states
-from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
-from aiida.orm.group import Group
-
-from aiida.orm import Code
-from aiida.orm.data.base import Str, Float, Bool
-from aiida.orm.data.folder import FolderData
-from aiida.orm.data.remote import RemoteData
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm.data.structure import StructureData
-from aiida.orm.data.array.kpoints import KpointsData
-from aiida.orm.data.singlefile import SinglefileData
 from aiida.common.exceptions import AiidaException, NotExistent
 from aiida.common.datastructures import calc_states
 
-from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
+from aiida.orm import Data, load_node, Calculation, Code
+from aiida.orm.calculation.chillstep import ChillstepCalculation
+
+from aiida.orm.data.array.kpoints import KpointsData
+from aiida.orm.data.base import Str, Float, Bool
+from aiida.orm.data.folder import FolderData
+from aiida.orm.data.parameter import ParameterData
+from aiida.orm.data.remote import RemoteData
+from aiida.orm.data.singlefile import SinglefileData
+from aiida.orm.data.structure import StructureData
+from aiida.orm.group import Group
 from aiida.workflows.user.epfl_theos.quantumespresso.pw import get_bands_and_occupations_inline
+
+from aiida_flipper.utils import (get_or_create_parameters, get_pseudos, get_suggested_cutoff)
+from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
+
 
 class ScfwfCalculation(WorkChain):
     """

@@ -1,11 +1,15 @@
 import numpy as np
+
+from aiida.common.datastructures import calc_states
+
+from aiida.orm import CalculationFactory
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import make_inline
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
-from aiida.orm.data.upf import UpfData
 from aiida.orm.data.structure import StructureData, Site
-from aiida.common.datastructures import calc_states
-from aiida.orm import CalculationFactory
+from aiida.orm.data.upf import UpfData
+
+from aiida_flipper.utils import get_or_create_parameters
+
 PwCalculation = CalculationFactory('quantumespresso.pw')
 
 @make_inline

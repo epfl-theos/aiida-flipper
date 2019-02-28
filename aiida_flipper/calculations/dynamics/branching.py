@@ -1,15 +1,17 @@
+from aiida.common.constants import bohr_to_ang
+from aiida.common.links import LinkType
+from aiida.orm import Data, load_node, Calculation
+
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.chillstep.user.dynamics.replay import ReplayCalculation
-from aiida_flipper.calculations.inline_calcs import get_structure_from_trajectory_inline
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.structure import StructureData
 from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm import Data, load_node, Calculation
-from aiida.common.constants import bohr_to_ang
 from aiida.orm.querybuilder import QueryBuilder
-from aiida.common.links import LinkType
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
 
+
+from aiida_flipper.calculations.inline_calcs import get_structure_from_trajectory_inline
+from aiida_flipper.utils import get_or_create_parameters
 
 
 class BranchingCalculation(ChillstepCalculation):

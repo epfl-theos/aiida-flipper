@@ -1,16 +1,15 @@
 import copy, os
 
+from aiida.backends.utils import get_authinfo
+from aiida.common.datastructures import calc_states
+from aiida.orm import Data, load_node, Calculation, DataFactory
 from aiida.orm.calculation.chillstep import ChillstepCalculation
-
-
 from aiida.orm.calculation.inline import make_inline
 from aiida.orm.data.parameter import ParameterData
-from aiida.orm import Data, load_node, Calculation, DataFactory
-from aiida.backends.utils import get_authinfo
-from aiida_scripts.database_utils.reuse import get_or_create_parameters
-from aiida.common.datastructures import calc_states
-from aiida_scripts.upf_utils.get_pseudos import get_pseudos, get_suggested_cutoff
 from aiida.orm.group import Group
+
+from aiida_flipper.utils import get_pseudos, get_suggested_cutoff
+from aiida_flipper.utils import get_or_create_parameters
 
 CHARGE_PARAMS_DICT = {
     u'CONTROL': {
