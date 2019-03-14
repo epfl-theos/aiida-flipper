@@ -171,8 +171,10 @@ def get_diffusion_from_msd_inline(**kwargs):
 
 def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
 
-    from aiida.common.constants import timeau_to_sec
-    from mdtools.libs.mdlib.trajectory_analysis import TrajectoryAnalyzer
+    
+    from aiida.common.constants import timeau_to_sec, bohr_to_ang
+    from samos.trajectory import Trajectory
+    from samos.analysis.dynamics import DynamicsAnalyzer
 
     parameters_d = parameters.get_dict()
     trajdata_list = trajectories.values()
@@ -214,26 +216,38 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     #~ timestep_fs = timestep
     equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
 
-    trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
-    ta = TrajectoryAnalyzer(verbosity=0)
-    species_of_interest = parameters_d.pop('species_of_interest', None)
-    ta.set_structure(structure, species_of_interest=species_of_interest)
-    ta.set_trajectories(
-            trajectories, # velocities=velocities if plot else None,
-            pos_units=units_positions, # vel_units=units_velocities,
-            timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
+    if units_positions in ('bohr', 'atomic'):
+        pos_conversion = bohr_to_ang
+    elif units_positions == 'angstrom':
+        pos_conversion = 1.0
+    else:
+        raise RuntimeError("Unknown units for positions {}".format(units_positions))
+
+    trajectories = []
+    atoms = structure.get_ase()
+    for trajdata in trajdata_list:
+        positions = pos_conversion*trajdata.get_positions()[equilibration_steps:]
+        trajectory = Trajectory(timestep=t.get_attr('timestep_in_fs'))
+        trajectory.set_atoms(atoms)
+        trajectory.set_positions(positions)
+        trajectories.append(trajectory)
+
+    dynanalizer = DynamicsAnalyzer(verbosity=0)
+    dynanalizer.set_trajectories(trajectories)
+
+    msd_iso = dynanalizer.get_msd(**parameters_d)
 
     res, arr = ta.get_msd(**parameters_d)
     #~ print res["Li"]["diffusion_sem_cm2_s"]
     if plot_and_exit:
-        ta.plot_results()
-        return
+        raise NotImplemented
+
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
-    arr_data.set_array('msd', arr)
-    arr_data._set_attr('species_of_interest', species_of_interest)
-    for k,v in res.items():
-        arr_data._set_attr(k,v)
+    for arrayname in msd_iso.get_arraynames():
+        arr_data.set_array(arrayname, msd_iso.get_array(arrayname))
+    for attr, val in msd_iso.get_attrs().items():
+        arr_data._set_attr(attr, val)
 
     return {'msd_results':arr_data}
 
