@@ -224,21 +224,30 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         raise RuntimeError("Unknown units for positions {}".format(units_positions))
 
     trajectories = []
+    species_of_interest = parameters_d.pop('species_of_interest', None)
+    # if species_of_interest is unicode:
+    if isinstance(species_of_interest, (tuple, set, list)):
+        species_of_interest = map(str, species_of_interest)
     atoms = structure.get_ase()
     for trajdata in trajdata_list:
         positions = pos_conversion*trajdata.get_positions()[equilibration_steps:]
+        nat_in_traj = positions.shape[1]
         trajectory = Trajectory(timestep=t.get_attr('timestep_in_fs'))
-        trajectory.set_atoms(atoms)
+        if nat_in_traj != len(atoms):
+            indices = [i for i, a in enumerate(atoms.get_chemical_symbols()) if a in species_of_interest]
+            if len(indices) == nat_in_traj:
+                trajectory.set_atoms(atoms[indices])
+            else:
+                raise ValueError("number of atoms in trajectory is weird")
+        else:
+            trajectory.set_atoms(atoms)
         trajectory.set_positions(positions)
         trajectories.append(trajectory)
 
     dynanalizer = DynamicsAnalyzer(verbosity=0)
     dynanalizer.set_trajectories(trajectories)
+    msd_iso = dynanalizer.get_msd(species_of_interest=species_of_interest, **parameters_d)
 
-    msd_iso = dynanalizer.get_msd(**parameters_d)
-
-    res, arr = ta.get_msd(**parameters_d)
-    #~ print res["Li"]["diffusion_sem_cm2_s"]
     if plot_and_exit:
         raise NotImplemented
 
