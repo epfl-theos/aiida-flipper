@@ -69,6 +69,8 @@ class ReplayCalculation(ChillstepCalculation):
             max_wallclock_seconds = self.ctx.walltime_seconds
         except (AttributeError, KeyError):
             max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
+        queue_name = moldyn_parameters_d.get('queue_name', None)
+        custom_scheduler_commands = moldyn_parameters_d.get('custom_scheduler_commands', None)
 
         for linkname, input_node in self.get_inputs_dict().iteritems():
             if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
@@ -94,6 +96,8 @@ class ReplayCalculation(ChillstepCalculation):
             resources = self.inputs.moldyn_parameters.dict.resources
         calc.set_resources(resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
+        calc.set_queue_name(queue_name)
+        calc.set_custom_scheduler_commands(custom_scheduler_commands)
         try:
             # There's something very strange going on: This works only for flipper, not for Hustler! Why???
             calc._set_parent_remotedata(self.inp.remote_folder)
