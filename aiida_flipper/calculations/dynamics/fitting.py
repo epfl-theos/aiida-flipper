@@ -1,5 +1,5 @@
 
-
+from abc import abstractmethod
 from aiida.orm import Data, load_node, Calculation, CalculationFactory, Group
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import optional_inline, make_inline
@@ -97,42 +97,65 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
 
     return {'coefficients':ParameterData(dict=dict(coefs=coefs.tolist(), mae=mae_f, nr_of_coefs=len(coefs), indices_removed=sorted(starting_indices)))}
 
-class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
+@make_inline
+def get_configurations_from_trajectories_inline(parameters, structure, **branches):
+    parameters_d = parameters.get_dict()
+    nr_of_configurations = parameters_d['nr_of_configurations']
+    # taking the trajectories, sorted by key name:
+    sorted_trajectories = zip(*sorted(branches.items()))[1]
+    
+    sorted_positions = np.concatenate([t.get_positions() for t in sorted_trajectories])
+    print sorted_positions.shape
+    positions = structure.get_ase().positions
+    print positions.shape
+    if 'indices_to_overwrite' in parameters_d:
+        indices_to_overwrite = np.array(parameters_d['indices_to_overwrite'])
+    elif 'symbols_to_overwrite' in parameters_d:
+        symbols = parameters_d['symbols_to_overwrite']
+        if isinstance(symbols, (set, tuple, list)):
+            pass
+        elif isinstance(symbols, str):
+            symbols = [symbols]
+        else:
+            raise TypeError("Symbols has to be str or a list of strings")
+        indices_to_overwrite = np.array([i for i, s in enumerate(structure.get_site_kindnames()) if s in symbols])
+    else:
+        indices_to_overwrite = np.arange(len(positions))
+    if 'indices_to_read' in parameters_d:
+        indices_to_read = np.array(parameters_d['indices_to_read'])
+    else:
+        indices_to_read = np.arange(sorted_positions.shape[1])
+    if len(indices_to_read) != len(indices_to_overwrite):
+        raise IndexError("The indices for reading or writing have different lengths")
+
+    new_positions = np.repeat(np.array([positions]), nr_of_configurations, axis=0)
+    time_split = (sorted_positions.shape[0] - 1)/ (nr_of_configurations -1)
+    # the top -1 is to not get index out of bonds
+    # when shape 0 is divisible by nr_of_configurations
+    # The bottom -1 is because I need N-1 slices, starting from 0, ending at the end of the trajectory.
+    time_indices = np.arange(0,sorted_positions.shape[0],time_split)[:nr_of_configurations]
+    for idx in range(nr_of_configurations):
+        new_positions[idx, indices_to_overwrite, :] = sorted_positions[time_indices[idx], indices_to_read, :]
+    print 'new_positions', new_positions.shape
+    array = ArrayData()
+    atoms = structure.get_ase() # [indices_to_read]
+    array.set_array('symbols', np.array(atoms.get_chemical_symbols()))
+    array.set_array('positions', new_positions)
+    array._set_attr('units|positions', 'angstrom')
+    return dict(positions=array)
+
+class FittingCalculation(ChillstepCalculation):
+    @abstractmethod
     def start(self):
-        # So, I have a structure that should be at the energetic minumum.
-        # I will produce a trajectory that comes from randomly displacing
-        # the pinball atoms.
-
-        self.inp.structure
-        self.inp.remote_folder_flipper
-        # self.inp.electron_parameters
-        self.inp.parameters
-        # self.inp.flipper_code
-        self.inp.pseudo_Li
-
-        parameters_d = self.inp.parameters.get_dict()
-        pks = parameters_d['pinball_kind_symbol']
-        nr_of_pinballs = self.inp.structure.get_site_kindnames().count(pks)
-        # Nr of configurations: How many configuration do I need to achieve the data points I want?
-        nr_of_configurations = int(float(parameters_d['nr_of_force_components']) / nr_of_pinballs / 3) + 1 # Every pinball atoms has 3 force components
-        rattling_parameters_d = {
-            'elements':[pks],
-            'nr_of_configurations': nr_of_configurations,
-            'stdev':parameters_d['stdev']
-        }
-        # TODO: CALL link
-        c, res = rattled_positions = rattle_randomly_structure_inline(
-                structure=self.inp.structure,
-                parameters=get_or_create_parameters(rattling_parameters_d))
-        
-        self.ctx.nstep = res['rattled_positions'].get_attr('array|positions')[0]
-        res['rattle_structure'] = c
-        self.goto(self.launch_replays)
-        return res
-
+        """
+        Method to start (i.e. how to create the positions) 
+        has to be defined by the subclass
+        """
+        pass
 
     def launch_calculations(self):
         #~ rattled_positions = self.out.rattled_positions
+        raise DeprecationWarning()
         rattled_positions = self.start()['rattled_positions']
         nstep = self.ctx.nstep
         remote_folder = self.inp.remote_folder
@@ -220,11 +243,7 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         return {'hustler_flipper':flipper_calc, 'hustler_dft':dft_calc}
 
     def launch_replays(self):
-
-        # start was before this step, so I have rattled_positions in my outputs!
-        rattled_positions = self.out.rattled_positions
-
-
+        positions = self.positions
         own_inputs = self.get_inputs_dict()
         own_parameters = own_inputs['parameters'].get_dict()
         # pseudofamily = own_parameters['pseudofamily']
@@ -240,7 +259,7 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
                     is_hustler=True,
                 ), store=True),
             structure=own_inputs['structure'],
-            hustler_positions=rattled_positions,
+            hustler_positions=positions,
             parameters=own_inputs['parameters_dft'],
         )
         inputs_flipper = dict(
@@ -251,7 +270,7 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
                     is_hustler=True,
                 ), store=True),
             structure=own_inputs['structure'],
-            hustler_positions=rattled_positions,
+            hustler_positions=positions,
             parameters=own_inputs['parameters_flipper'],
             remote_folder=self.inp.remote_folder_flipper,
         )
@@ -339,4 +358,68 @@ class FittingFlipper1RandomlyDisplacedPosCalculation(ChillstepCalculation):
         # TODO: CALL linkv
         self.goto(self.exit)
         return {'get_pinball_factors':calc, 'coefficients':coefficients}
+
+
+class FittingFromTrajectoryCalculation(FittingCalculation):
+    @property
+    def positions(self):
+        return self.inp.positions
+
+    def start(self):
+        """
+        Method to start (i.e. how to create the positions) 
+        has to be defined by the subclass
+        """
+        # So, I have a structure that should be at the energetic minumum.
+
+        self.inp.structure
+        self.inp.remote_folder_flipper
+        # self.inp.electron_parameters
+        self.inp.parameters
+        # self.inp.flipper_code
+        self.inp.pseudo_Li
+        # an array that I will calculated the forces on!
+        self.ctx.nstep = self.inp.positions.get_array('positions').shape[0]
+
+        self.inp.parameters
+        self.goto(self.launch_replays)
+
+
+class FittingFlipper1RandomlyDisplacedPosCalculation(FittingCalculation):
+    @property
+    def positions(self):
+        return self.out.rattle_structure
+
+    def start(self):
+        # So, I have a structure that should be at the energetic minumum.
+        # I will produce a trajectory that comes from randomly displacing
+        # the pinball atoms.
+
+        self.inp.structure
+        self.inp.remote_folder_flipper
+        # self.inp.electron_parameters
+        self.inp.parameters
+        # self.inp.flipper_code
+        self.inp.pseudo_Li
+
+        parameters_d = self.inp.parameters.get_dict()
+        pks = parameters_d['pinball_kind_symbol']
+        nr_of_pinballs = self.inp.structure.get_site_kindnames().count(pks)
+        # Nr of configurations: How many configuration do I need to achieve the data points I want?
+        nr_of_configurations = int(float(parameters_d['nr_of_force_components']) / nr_of_pinballs / 3) + 1 # Every pinball atoms has 3 force components
+        rattling_parameters_d = {
+            'elements':[pks],
+            'nr_of_configurations': nr_of_configurations,
+            'stdev':parameters_d['stdev']
+        }
+        # TODO: CALL link
+        c, res = rattle_randomly_structure_inline(
+                structure=self.inp.structure,
+                parameters=get_or_create_parameters(rattling_parameters_d))
+        
+        self.ctx.nstep = res['rattled_positions'].get_attr('array|positions')[0]
+        res['rattle_structure'] = c
+        self.goto(self.launch_replays)
+        return res
+
 
