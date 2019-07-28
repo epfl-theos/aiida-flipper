@@ -222,11 +222,9 @@ class FlipperParser(Parser):
 
         with open(evp_file) as f:
             try:
-                scalar_quantities = np.array([
-                        map(float, line.split()[1:8])
-                        for line
-                        in f.readlines()
-                    ])
+                # Using np.genfromtxt instead of np.loadtxt, because this function
+                # gives NaN to a value it cannot read, and doesn't throw an error!
+                scalar_quantities = np.genfromtxt(f, usecols=range(1,8))
                 if scalar_quantities.shape[1] != 7:
                     raise ValueError("Bad shape detected {}".format(scalar_quantities.shape))
             except (ValueError, IndexError) as e:
@@ -303,7 +301,6 @@ class FlipperParser(Parser):
             velocities = get_coords_from_file(vel_file, POS_BLOCK_REGEX, POS_REGEX_3)
         except ValueError:
             velocities = get_coords_from_file_slow_and_steady(vel_file, 3)
-
 
         trajectory_data = TrajectoryData()
 
@@ -392,7 +389,6 @@ class FlipperParser(Parser):
             velocities=velocities,
         )
 
-
         trajectory_data._set_attr('atoms',in_struc.get_site_kindnames())
 
         if timestep_in_fs is not None:
@@ -451,10 +447,14 @@ class FlipperParser(Parser):
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
 
-        for arr in (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures):
-            if np.isnan(arr).any():
-                successful = False
 
+        # comment the following if you want this check.
+        # For the hustler I don't want it
+        if not calc_input.dict.CONTROL.get('lhustle', False):
+            for arr in (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures):
+                if np.isnan(arr).any():
+                    successful = False
+        
         return successful, new_nodes_list
 
     def get_parser_settings_key(self):
