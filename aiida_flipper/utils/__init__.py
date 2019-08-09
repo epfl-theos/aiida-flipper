@@ -149,7 +149,8 @@ def make_fitted(f_trial, coefs,  signal_indices=None):
 def plot_forces(forces, format_=None, nrows=1,
         istart=0, iend=None, savefig=None, labels=None, titles=None,
         suptitle=None, filenames=None, common_limits=True, plot_fit=True,
-        plot_slope1=False, plot_norm=False, limits=None, maxpoints=None):
+        plot_slope1=False, plot_norm=False, limits=None, maxpoints=None,
+        figmargins=(0.25,0.95,0.18,0.85,0.5,0.2), figsize=None):
     from matplotlib import pyplot as plt, gridspec
     from scipy.stats import linregress
     if format_ is None:
@@ -181,13 +182,15 @@ def plot_forces(forces, format_=None, nrows=1,
 
     # Plotting everything to a row for now, this should be maybe changed at a later point:
     #~ fig = plt.figure(figsize=(10+nr_of_plots*5+1,10.5))
-    I = 0.8
-    fig = plt.figure(figsize=(4*I, 3*I))
+    if figsize is None:
+        I = 0.8
+        figsize = (4*I, 3*I)
+    fig = plt.figure(figsize=figsize)
     if suptitle:
         plt.suptitle(suptitle, fontsize=12)
     gs = iter(gridspec.GridSpec(
             nrows, nr_of_plots/nrows+int(bool(nr_of_plots%nrows)),
-            left=0.24, right=0.95, bottom=0.18, top=0.85
+            left=figmargins[0], right=figmargins[1], bottom=figmargins[2], top=figmargins[3], wspace=figmargins[4], hspace=figmargins[5]
         ))
 
 
@@ -203,8 +206,8 @@ def plot_forces(forces, format_=None, nrows=1,
         f2 = forces[f2_idx]
         signal_1 = f1.get_signal(form1)[:minlen]
         signal_2 = f2.get_signal(form2)[:minlen]
-        print signal_1.shape
-        print signal_2.shape
+        #print signal_1.shape
+        #print signal_2.shape
         X, Y = signal_1.reshape(minlen*3), signal_2.reshape(minlen*3)
         
         if plot_slope1:
