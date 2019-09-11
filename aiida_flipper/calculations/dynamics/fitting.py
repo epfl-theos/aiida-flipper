@@ -27,6 +27,12 @@ HUSTLER_DFT_PARAMS_DICT = {
     u'IONS':{}
 }
 
+def get_frac_coords(cart_coords, cell_matrix):
+    return np.dot(cart_coords, np.linalg.inv(cell_matrix))
+
+def get_cart_coords(frac_coords, cell_matrix):
+    return np.dot(frac_coords, cell_matrix)
+
 @make_inline
 def rattle_randomly_structure_inline(structure, parameters):
     #~ from ase.constraints import FixAtoms
@@ -98,18 +104,55 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
 
     return {'coefficients':ParameterData(dict=dict(coefs=coefs.tolist(), mae=mae_f, nr_of_coefs=len(coefs), indices_removed=sorted(starting_indices)))}
 
+@make_inline
+def get_structures_from_trajectories_inline(parameters, label='', description='', **branches):
+    """
+    extract structures from a list of trajectories (branches)
+    parameters:
+        nr_of_configurations
+    """
+    parameters_d = parameters.get_dict()
+    nr_of_configurations = parameters_d['nr_of_configurations']
+
+    # taking the trajectories, sorted by key name:
+    sorted_trajectories = zip(*sorted(branches.items()))[1]
+
+#    sorted_steps = np.concatenate([t.get_steps() for t in sorted_trajectories])
+    numsteps = [t.numsteps for t in sorted_trajectories]
+    cumnumsteps = np.cumsum(numsteps)
+    totsteps = sum(numsteps)
+    deltasteps = totsteps / nr_of_configurations  # jump between steps
+    structures = {}
+    for step in (np.arange(nr_of_configurations) * deltasteps):
+        branch_id = np.argmin(cumnumsteps <= step)  # branch containing the step
+        branch_step_id = step - cumnumsteps[branch_id - 1]
+        structures['step_' + str(step)] = sorted_trajectories[branch_id].get_step_structure(branch_step_id)
+        structures['step_' + str(step)].label = label + '-step_{:d}'.format(step)
+        structures['step_' + str(step)].description = description + 'Step extracted: {:d}'.format(step)
+    return structures
+
+
 
 @make_inline
 def get_configurations_from_trajectories_inline(parameters, structure, **branches):
+    """
+    parameters:
+        nr_of_configurations --
+        indices_to_read, symbols to_read -- indices read from branches
+        indices_to_overwrite, symbols_to_overwrite -- indices of structure that will be overwritten
+        remap_into_cell -- if True remap the positions read from branches into the cell of structure (uses frac coordinates)
+    """
     parameters_d = parameters.get_dict()
     nr_of_configurations = parameters_d['nr_of_configurations']
     # taking the trajectories, sorted by key name:
     sorted_trajectories = zip(*sorted(branches.items()))[1]
     
     sorted_positions = np.concatenate([t.get_positions() for t in sorted_trajectories])
+    sorted_cells = np.concatenate([t.get_cells() for t in sorted_trajectories])
     print sorted_positions.shape
     positions = structure.get_ase().positions
     print positions.shape
+
     if 'indices_to_overwrite' in parameters_d:
         indices_to_overwrite = np.array(parameters_d['indices_to_overwrite'])
     elif 'symbols_to_overwrite' in parameters_d:
@@ -123,8 +166,18 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
         indices_to_overwrite = np.array([i for i, s in enumerate(structure.get_site_kindnames()) if s in symbols])
     else:
         indices_to_overwrite = np.arange(len(positions))
+
     if 'indices_to_read' in parameters_d:
         indices_to_read = np.array(parameters_d['indices_to_read'])
+    elif 'symbols_to_read' in parameters_d:
+        symbols = parameters_d['symbols_to_read']
+        if isinstance(symbols, (set, tuple, list)):
+            pass
+        elif isinstance(symbols, str):
+            symbols = [symbols]
+        else:
+            raise TypeError("Symbols has to be str or a list of strings")
+        indices_to_read = np.array([i for i, s in enumerate(sorted_trajectories[0].get_symbols()) if s in symbols])
     else:
         indices_to_read = np.arange(sorted_positions.shape[1])
     if len(indices_to_read) != len(indices_to_overwrite):
@@ -132,12 +185,18 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
 
     new_positions = np.repeat(np.array([positions]), nr_of_configurations, axis=0)
     time_split = (sorted_positions.shape[0] - 1)/ (nr_of_configurations -1)
+    # time_split:
     # the top -1 is to not get index out of bonds
     # when shape 0 is divisible by nr_of_configurations
     # The bottom -1 is because I need N-1 slices, starting from 0, ending at the end of the trajectory.
-    time_indices = np.arange(0,sorted_positions.shape[0],time_split)[:nr_of_configurations]
+    time_indices = np.arange(0, sorted_positions.shape[0], time_split)[:nr_of_configurations]
+    remap = parameters_d.get('remap_into_cell', False)
     for idx in range(nr_of_configurations):
-        new_positions[idx, indices_to_overwrite, :] = sorted_positions[time_indices[idx], indices_to_read, :]
+        if remap:
+            frac_coords = get_frac_coords(sorted_positions[time_indices[idx], indices_to_read, :], sorted_cells[time_indices[idx]])
+            new_positions[idx, indices_to_overwrite, :] = get_cart_coords(frac_coords, structure.cell)
+        else:
+            new_positions[idx, indices_to_overwrite, :] = sorted_positions[time_indices[idx], indices_to_read, :]
     print 'new_positions', new_positions.shape
     array = ArrayData()
     atoms = structure.get_ase() # [indices_to_read]
@@ -358,7 +417,7 @@ class FittingCalculation(ChillstepCalculation):
         coefficients.label = '{}-PBcoeffs'.format(self.inp.structure.label)
         try:
             # Maybe I'm supposed to store the result?
-            g = Group.get_from_string(self.inp.parameters.dict.results_group_name)
+            g,_ = Group.get_or_create(name=self.inp.parameters.dict.results_group_name)
             g.add_nodes(coefficients)
         except Exception as e:
             print '!!!!!!!!!', e

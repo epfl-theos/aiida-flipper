@@ -137,10 +137,6 @@ def get_structure_from_trajectory_inline(trajectory, parameters, structure=None,
 
 
 
-
-
-
-
 def concatenate_trajectory(**kwargs):
     for k, v in kwargs.iteritems():
         if not isinstance(v, TrajectoryData):
@@ -161,6 +157,7 @@ def concatenate_trajectory(**kwargs):
 @optional_inline
 def concatenate_trajectory_optional_inline(**kwargs):
     return concatenate_trajectory(**kwargs)
+
 @make_inline
 def concatenate_trajectory_inline(**kwargs):
     return concatenate_trajectory(**kwargs)
@@ -171,7 +168,6 @@ def get_diffusion_from_msd_inline(**kwargs):
 
 def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
 
-    
     from aiida.common.constants import timeau_to_sec, bohr_to_ang
     from samos.trajectory import Trajectory
     from samos.analysis.dynamics import DynamicsAnalyzer
@@ -332,9 +328,4 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
     for k,v in res.items():
         arr_data._set_attr(k,v)
     return {'msd_decomposed_results':arr_data}
-
-
-
-
-
 
