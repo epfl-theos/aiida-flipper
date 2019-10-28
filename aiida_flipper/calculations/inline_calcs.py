@@ -185,6 +185,9 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         do_long
         t_long_end_fs OR t_long_end_ps OR t_long_end_dt OR t_long_factor
         do_com
+
+    If t_start_fit and t_end_fit are arrays, the Diffusion coefficient will be calculated for each pair of values.
+    This allows one to study its convergence as a function of the window chosen to fit the MSD.
     """
 
     from aiida.common.constants import timeau_to_sec, bohr_to_ang
@@ -201,21 +204,19 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     if isinstance(parameters, ParameterData):
         parameters_d = parameters.get_dict()
     elif isinstance(parameters, dict):
-        parameters_d = parameters
+        parameters_d = parameters.copy()
     else:
         raise TypeError("parameters type not valid")
-    if not isinstance(trajectories, dict):
-        raise TypeError("trajectories must be a dictionary")
+    for traj in trajectories.itervalues():
+        if not isinstance(traj, TrajectoryData):
+            raise TypeError("trajectories must be TrajectoryData")
     trajdata_list = trajectories.values()
 
     ####################### CHECKS ####################
     units_set = set()
     timesteps_set = set()
-    units_set = set()
-    vel_units_set = set()
     for t in trajdata_list:
         units_set.add(t.get_attr('units|positions'))
-        vel_units_set.add(t.get_attr('units|velocities'))
     try:
         for t in trajdata_list:
             timesteps_set.add(t.get_attr('timestep_in_fs'))
@@ -230,18 +231,12 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     units_positions = units_set.pop()
     if units_set:
         raise Exception("Incommensurate units")
-    units_velocities = vel_units_set.pop()
-    if vel_units_set:
-        raise Exception("Incommensurate units")
-    # legacy:
-    if units_velocities == 'atomic':
-        units_velocities = 'pw'
     # Same timestep is mandatory!
     timestep_fs = timesteps_set.pop()
     if timesteps_set:
         timesteps_set.add(timestep_fs)
         raise Exception("Multiple timesteps {}".format(timesteps_set))
-    equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
+    equilibration_steps = int(parameters_d.pop('equilibration_time_fs', 0) / timestep_fs)
     if units_positions in ('bohr', 'atomic'):
         pos_conversion = bohr_to_ang
     elif units_positions == 'angstrom':
@@ -304,11 +299,8 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
     ####################### CHECKS ####################
     units_set = set()
     timesteps_set = set()
-    units_set = set()
-    vel_units_set = set()
     for t in trajdata_list:
         units_set.add(t.get_attr('units|positions'))
-        vel_units_set.add(t.get_attr('units|velocities'))
     try:
         for t in trajdata_list:
             timesteps_set.add(t.get_attr('timestep_in_fs'))
@@ -323,12 +315,6 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
     units_positions = units_set.pop()
     if units_set:
         raise Exception("Incommensurate units")
-    units_velocities = vel_units_set.pop()
-    if vel_units_set:
-        raise Exception("Incommensurate units")
-    # legacy:
-    if units_velocities == 'atomic':
-        units_velocities = 'pw'
     # Same timestep is mandatory!
     timestep_fs = timesteps_set.pop()
     if timesteps_set:
