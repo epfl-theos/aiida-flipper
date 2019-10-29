@@ -266,7 +266,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         trajectories.append(trajectory)
 
     # compute msd
-    dynanalyzer = DynamicsAnalyzer(verbosity=0)
+    dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity', 0))
     dynanalyzer.set_trajectories(trajectories)
     msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, **parameters_d)
 

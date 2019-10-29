@@ -1,9 +1,12 @@
 from aiida.common.hashing import make_hash
-from aiida.orm import Calculation
+from aiida.orm import Calculation, Node
+from aiida.orm.data.array import ArrayData
 from aiida.orm.data.array.kpoints import KpointsData
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.structure import StructureData
+from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.data.upf import UpfData
+from aiida.orm.calculation import InlineCalculation
 from aiida.orm.group import Group
 from aiida.orm.querybuilder import QueryBuilder
 
@@ -105,4 +108,52 @@ def get_or_create_parameters(parameters, store=False):
         params.store()
         params.set_extra('hash', hash_)
     return params
+
+
+def get_or_compute_diffusion_from_msd(calc, msd_parameters, add_to_group_name=None):
+    """
+    Computes the diffusion from the mean-square displacement of a ReplayCalculation or DiffusionCalculation
+    using msd_parameters, or retrieves results array, if it was already stored.
+    """
+    from aiida.orm.calculation.chillstep.user.dynamics import DiffusionCalculation, ReplayCalculation
+    from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline
+
+    if isinstance(calc, DiffusionCalculation):
+        branches = calc._get_branches()
+    elif isinstance(calc, ReplayCalculation):
+        try:
+            branches = {'traj_0': calc.get_outputs_dict()['total_trajectory']}
+        except KeyError:
+            return None
+    else:
+        raise TypeError('calc must be a DiffusionCalculation or ReplayCalculation')
+
+    structure = calc.inp.structure
+    if isinstance(msd_parameters, dict):
+        parameters = get_or_create_parameters(msd_parameters, store=True)
+    elif isinstance(msd_parameters, ParameterData):
+        parameters = msd_parameters
+
+    # find if msd was already computed with the same parameters
+    qb = QueryBuilder()
+    qb.append(Node, filters={'id': calc.id})
+    qb.append(TrajectoryData)
+    qb.append(InlineCalculation, tag='msd_calc')
+    qb.append(ParameterData, input_of='msd_calc', project=['*'])
+    qb.append(ArrayData, edge_filters={'label': {'like': 'msd_results%'}}, output_of='msd_calc', project=['*'])
+    for n in qb.iterall():
+        # n[0]: input msd parameters;  n[1]: output msd results
+        if (n[0].get_attrs() == parameters.get_attrs()):
+            return n[1]  # msd_results was already computed --> return results node
+
+    # msd_results was not computed --> compute it, store and return results node
+    if (len(branches) > 0):
+        inlinecalc, res = get_diffusion_from_msd_inline(structure=structure, parameters=parameters, **branches)
+        inlinecalc.label = calc.label + '-get_diffusion'
+        if add_to_group_name is not None:
+            group, _ = Group.get_or_create(name=add_to_group_name)
+            group.add_nodes(res['msd_results'])
+        return res['msd_results']
+    else:
+        return None
 
