@@ -174,6 +174,7 @@ class FlipperParser(Parser):
             except:
                 walltime = -1.
             try:
+                # TODO: This does not work!!
                 nstep = get_nstep_from_outputf(txt)
             except:
                 nstep = -1
@@ -227,6 +228,8 @@ class FlipperParser(Parser):
                 scalar_quantities = np.genfromtxt(f, usecols=range(1,8))
                 if scalar_quantities.shape[1] != 7:
                     raise ValueError("Bad shape detected {}".format(scalar_quantities.shape))
+                f.seek(0)
+                convergence = np.genfromtxt(f, dtype='S1', usecols=(8), converters={8: (lambda s: F90_BOOL_DICT[s])})
             except (ValueError, IndexError) as e:
                 # There was an error conversion, it has happened
                 # that '************' appears in an evp file....
@@ -240,11 +243,12 @@ class FlipperParser(Parser):
                 # This is much slower, but the only way to things properly
                 try:
                     scalar_quantities = np.empty((idx,8))
+                    convergence = np.empty(idx)
                 except NameError:
                     raise OutputParsingError("Empty file {}".format(evp_file))
                 f.seek(0)
                 for iline, line in enumerate(f.readlines()):
-                    if iline==idx:
+                    if (iline == idx):
                         break
                     for ival, val in enumerate(line.split()[1:8]):
                         try:
@@ -252,17 +256,12 @@ class FlipperParser(Parser):
                         except ValueError:
                             # print line
                             scalar_quantities[iline, ival] = np.nan
+                    try:
+                        convergence[iline] = F90_BOOL_DICT[line.split()[8]]
+                    except KeyError:
+                        convergence[iline] = np.nan
                 # print scalar_quantities[-1,:]
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
-
-        # Reading the convergence in a different loop
-        with open(evp_file) as f:
-            try:
-                convergence = np.array([F90_BOOL_DICT[line.split()[8]] for line in f.readlines()])
-            except Exception as e:
-                print e
-
-
 
         if len(scalar_quantities) == 0:
             raise OutputParsingError("No scalar quantities in output")
