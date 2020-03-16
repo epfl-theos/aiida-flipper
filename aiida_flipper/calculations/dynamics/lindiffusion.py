@@ -301,6 +301,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         structure = inp_d.pop('structure')
         for kind in structure.kinds:
             inp_d.pop('pseudo_{}'.format(kind.name))
+            inp_d.pop('pseudo_{}_flipper'.format(kind.name), None)
         
 
         # The code label has to be set as an attribute, and can be changed during the dynamics
@@ -318,11 +319,11 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         
         for optional_kw in ('remote_folder', 'settings', 'moldyn_parameters_thermalize',
                 'parameters_thermalize'):
-            inp_d.pop(required_kw, None)
+            inp_d.pop(optional_kw, None)
 
 
 
-        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters')
+        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
         try:
             maxiter = diffusion_convergence_parameters_d['max_iterations']
             if not isinstance(maxiter, int):
@@ -342,11 +343,11 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         except KeyError:
             raise KeyError("Keyword min_iterations not included in diffusion convergence parameters")
 
-        for key, typ in (('species', str), ):
+        for key, typ in (('species', basestring), ):
             if key not in diffusion_convergence_parameters_d:
                 raise KeyError("Key {} has to be in diffusion convergence parameters")
             if not isinstance(diffusion_convergence_parameters_d[key], typ):
-                raise TypeError("Key {} has the wrong type as value")
+                raise TypeError("Key {} has the wrong type ({} {}) as value".format(key, diffusion_convergence_parameters_d[key], type(diffusion_convergence_parameters_d[key])))
             
         if inp_d:
             raise Exception("More keywords provided than needed: {}".format(inp_d.keys()))
@@ -360,12 +361,13 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         Runs an LindiffusionCalculation for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
+        from aiida.orm.data.upf import UpfData
         inp_d = self.get_inputs_dict()
         for k,v in inp_d.items():
             # This is a top level workflow, but if it is was called by another, I remove the calls:
             if isinstance(v, Calculation):
                 inp_d.pop(k)
-        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters')
+        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
 
         # the dictionary for the inputs to the diffusion workflow, first UPF:
         lindiff_inp = {k:v for k,v in inp_d.items() if isinstance(v, UpfData)}
@@ -377,7 +379,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             lindiff_inp[required_kw] = inp_d[required_kw]
         for optional_kw in ('settings', 'remote_folder'):
             if optional_kw in inp_d:
-                lindiff_inp[required_kw] = inp_d[required_kw]
+                lindiff_inp[optional_kw] = inp_d[optional_kw]
 
         if self.ctx.diff_counter:
             coefs = self._get_last_fits(nr_of_calcs=1,
@@ -401,7 +403,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
 
         self.goto(self.check)
         self.ctx.diff_counter += 1
-        return {'{}_{}'.format(self._diff_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0))):repl}
+        return {'{}_{}'.format(self._diff_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0))):diff}
 
 
     def check(self):
@@ -409,7 +411,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
                     nr_of_calcs=1)[0]
 
-        if diffusion_parameters_d['max_iterations'] <= self.ctx.diff_counter:
+        if diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
             print 'Cannot run more'
             self.goto(self.collect)
             return
