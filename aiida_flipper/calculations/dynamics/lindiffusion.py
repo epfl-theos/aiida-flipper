@@ -1,6 +1,3 @@
-
-from aiida.backends.utils import get_automatic_user
-
 from aiida.common.links import LinkType
 
 from aiida.orm.calculation.chillstep import ChillstepCalculation
@@ -16,8 +13,6 @@ from aiida_flipper.calculations.inline_calcs import (
         get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline)
 
 from aiida_flipper.utils import get_or_create_parameters
-
-USER = get_automatic_user()
 
 class LindiffusionCalculation(ChillstepCalculation):
 
@@ -281,7 +276,7 @@ class ConvergeDiffusion(ChillstepCalculation):
         res = []
         for idx in range(nr_of_calcs):
             res.append(getattr(self.out, 
-            '{}_{}'.format(self._diff_name, str(self.ctx.replay_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
+            '{}_{}'.format(self._diff_name, str(self.ctx.diff_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
         return res
 
     def _get_last_fits(self, nr_of_calcs=1, diffusion_convergence_parameters_d=None):
@@ -290,7 +285,7 @@ class ConvergeDiffusion(ChillstepCalculation):
         res = []
         for idx in range(nr_of_calcs):
             res.append(getattr(self.out, 
-            '{}_{}'.format(self._fit_name, str(self.ctx.replay_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
+            '{}_{}'.format(self._fit_name, str(self.ctx.diff_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
         return res
 
     def start(self):
