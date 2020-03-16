@@ -264,7 +264,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         return {'{}'.format(item['mb']['label']):item['t']['*'] for item in qb.iterdict()}
 
 
-class ConvergeDiffusion(ChillstepCalculation):
+class ConvergediffusionCalculation(ChillstepCalculation):
     _diff_name = 'diff'
     _fit_name = 'fit'
     def _get_last_diffs(self, nr_of_calcs=1, diffusion_convergence_parameters_d=None):
