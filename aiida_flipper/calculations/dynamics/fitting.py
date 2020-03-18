@@ -112,7 +112,7 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
         symbols = parameters_d['symbols_to_overwrite']
         if isinstance(symbols, (set, tuple, list)):
             pass
-        elif isinstance(symbols, str):
+        elif isinstance(symbols, basestring):
             symbols = [symbols]
         else:
             raise TypeError("Symbols has to be str or a list of strings")

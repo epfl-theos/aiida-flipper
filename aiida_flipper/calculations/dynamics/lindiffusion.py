@@ -7,12 +7,14 @@ from aiida.orm.calculation.chillstep.user.dynamics.replay import ReplayCalculati
 from aiida.orm import load_node, Group, Calculation, Code
 from aiida.orm.querybuilder import QueryBuilder
 from aiida.orm.data.array.trajectory import TrajectoryData
+from aiida.orm.data.upf import UpfData
 
 from aiida_flipper.calculations.inline_calcs import (
         get_diffusion_from_msd_inline, get_diffusion_from_msd, 
         get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline)
 
 from aiida_flipper.utils import get_or_create_parameters
+
 
 class LindiffusionCalculation(ChillstepCalculation):
 
@@ -312,7 +314,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         for required_kw in ('moldyn_parameters_main', 'parameters_main', 'msd_parameters',
                 'diffusion_parameters',
                 'parameters_fitting', 'parameters_fitting_dft', 'parameters_fitting_flipper',
-                'hustler_code', 'kpoints'):
+                'structure_fitting_parameters', 'hustler_code', 'kpoints'):
             if required_kw not in inp_d:
                 raise KeyError("Input requires value with keyword {}".format(required_kw))
             inp_d.pop(required_kw)
@@ -361,7 +363,6 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         Runs an LindiffusionCalculation for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
-        from aiida.orm.data.upf import UpfData
         inp_d = self.get_inputs_dict()
         for k,v in inp_d.items():
             # This is a top level workflow, but if it is was called by another, I remove the calls:
@@ -386,11 +387,11 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
                     diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
                     )[0].out.coefficients.get_attr('coefs')
             parameters_main_d = inp_d['parameters_main'].get_dict()
-            parameters_main_d['SYSTEM']['flipper_local_factor'] = coefficients_d['coefs'][0]
-            parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefficients_d['coefs'][1]
-            parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefficients_d['coefs'][2]
-            parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefficients_d['coefs'][3]
-            lindiff_inp['parameters_main'] = get_or_create_parameters(parameters_main_d)
+            parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
+            parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
+            parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
+            parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
+            lindiff_inp['parameters_main'] = get_or_create_parameters(parameters_main_d, store=True)
         else:
             # In case there was no fitting done. I don't set anything in case
             # the user already gave a good guess of what the parameters are
@@ -406,6 +407,39 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         return {'{}_{}'.format(self._diff_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0))):diff}
 
 
+    def run_fit(self):
+        """
+        Runs a fitting workflow on positions taken from the last trajectory
+        """
+        from fitting import get_configurations_from_trajectories_inline, FittingFromTrajectoryCalculation
+
+        diffusion_convergence_parameters_d =  self.inputs.diffusion_convergence_parameters.get_dict()
+        lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
+                    nr_of_calcs=1)[0]
+
+        # Since I have not converged I need to run another fit calculation:
+        returndict = {}
+        # I need to launch a fitting calculation based on positions from the last diffusion estimate trajectory:
+        calc, res = get_configurations_from_trajectories_inline(
+                parameters=self.inp.structure_fitting_parameters, structure=self.inp.structure,
+                trajectory=lastcalc.out.concatenated_trajectory)
+        returndict['get_configurations_{}'.format(str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = calc
+        pseudos = {k:v for k,v in self.get_inputs_dict().items() if isinstance(v, UpfData)}
+        fit = FittingFromTrajectoryCalculation(
+                structure=self.inp.structure,
+                remote_folder_flipper=self.inp.remote_folder,
+                positions=res['positions'],
+                parameters=self.inp.parameters_fitting,
+                parameters_dft=self.inp.parameters_fitting_dft,
+                parameters_flipper=self.inp.parameters_fitting_flipper,
+                code=self.inp.hustler_code,
+                kpoints=self.inp.kpoints,
+                settings=self.inp.settings,
+                **pseudos)
+        returndict['{}_{}'.format(self._fit_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = fit
+        self.goto(self.run_estimates)
+        return returndict
+
     def check(self):
         diffusion_convergence_parameters_d =  self.inputs.diffusion_convergence_parameters.get_dict()
         lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
@@ -414,15 +448,13 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         if diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
             print 'Cannot run more'
             self.goto(self.collect)
-            return
-
-        if lastcalc.get_state() == 'FAILED':
+        elif lastcalc.get_state() == 'FAILED':
             raise Exception("Last diffusion {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
 
-        if diffusion_convergence_parameters_d['min_iterations'] > self.ctx.diff_counter:
+        elif diffusion_convergence_parameters_d['min_iterations'] > self.ctx.diff_counter:
             # just launch the next!
             print 'Did not run enough'
-            self.goto(self.run_estimates)
+            self.goto(self.run_fit)
         else:
             # Since I am here, it means I need to check the last 3 calculations to
             # see whether I converged or need to run again:
@@ -436,31 +468,8 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             if ( max(diffusions) - min(diffusions) ) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
                 # all good, I have converged!
                 self.goto(self.collect)
-                return
-        
-
-        # Since I have not converged I need to run another fit calculation:
-        returndict = {}
-
-        # I need to launch a fitting calculation based on the last calculations!
-        calc, positions = get_configurations_from_trajectories_inline(
-                parameters=structure_parameters, structure=self.inp.structure,
-                trajectory=lastcalc.out.concatenated_trajectory)
-        returndict['get_configurations_{}'.format(str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = calc
-        pseudos = {k:v for k,v in self.get_inputs_dict().items() if isinstance(v, UpfData)}
-        fit = FittingFromTrajectoryCalculation(
-                structure=self.inp.structure,
-                remote_folder_flipper=self.inp.remote_folder,
-                positions=positions,
-                parameters=self.inp.parameters_fitting,
-                parameters_dft=self.inp.parameters_fitting_dft,
-                parameters_flipper=self.inp.parameters_fitting_flipper,
-                code=self.inp.hustler_code,
-                kpoints=self.inp.kpoints,
-                settings=self.inp.settings,
-                **pseudos)
-        returndict['{}_{}'.format(self._fit_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = fit
-        return returndict
+            else:
+                self.goto(self.run_fit)
 
     def collect(self):
         last_calc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)[-1]
