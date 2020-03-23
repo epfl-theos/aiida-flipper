@@ -334,7 +334,18 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
     return {'msd_decomposed_results':arr_data}
 
 
+@make_inline
+def update_parameters_with_coefficients_inline(parameters, coefficients):
+    """
+    Updates the ParameterData instance passed with the coefficients
+    TODO: nonlocal vs local, currently on nonlocal is correclty implemented
+    """
+    coefs = coefficients.get_attr('coefs')
+    parameters_main_d = parameters.get_dict()
+    parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
+    parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
+    parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
+    parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
 
-
-
+    return {'updated_parameters':ParameterData(dict=parameters_main_d)}
 

@@ -11,7 +11,8 @@ from aiida.orm.data.upf import UpfData
 
 from aiida_flipper.calculations.inline_calcs import (
         get_diffusion_from_msd_inline, get_diffusion_from_msd, 
-        get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline)
+        get_structure_from_trajectory_inline, concatenate_trajectory, concatenate_trajectory_inline,
+        update_parameters_with_coefficients_inline)
 
 from aiida_flipper.utils import get_or_create_parameters
 
@@ -127,14 +128,18 @@ class LindiffusionCalculation(ChillstepCalculation):
             inp_d['structure'] = self.inputs.structure
             inp_d['settings'] = self.inp.settings
         else:
+            # if trajectory and structure have different shapes (i.e. for pinball level 1 ccalculation on pinball positions are printed:
+            create_missing = len(self.inp.structure.sites) != last_calc.out.total_trajectory.get_attr('array|positions')[1]
+            # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
             kwargs = dict(trajectory=last_calc.out.total_trajectory, parameters=get_or_create_parameters(dict(
                             step_index=-1,
                             recenter=False, #self.inputs.parameters_branching.dict.recenter_before_nvt,
                             create_settings=True,
-                            complete_missing=False), store=True),
+                            complete_missing=create_missing), store=True),
                     # structure=self.inp.structure
                 )
-
+            if create_missing:
+                kwargs['structure'] = self.inp.structure
             try:
                 kwargs['settings'] = self.inp.settings
             except:
@@ -269,26 +274,31 @@ class LindiffusionCalculation(ChillstepCalculation):
 class ConvergeDiffusionCalculation(ChillstepCalculation):
     _diff_name = 'diff'
     _fit_name = 'fit'
-    def _get_last_diffs(self, nr_of_calcs=1, diffusion_convergence_parameters_d=None):
+    def _get_last_calcs(self, link_name, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
         """
         Get the N last diffusion calculations, where N is given by the integer nr_of_calcs:
         """
         if diffusion_convergence_parameters_d is None:
             diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
+        current_counter = self.ctx.diff_counter
+        if nr_of_calcs is None:
+            start = 1
+        else:
+            start = current_counter - nr_of_calcs + 1
+            if start < 1:
+                raise ValueError("You asked for more calculations than there are")
         res = []
-        for idx in range(nr_of_calcs):
+        for idx in range(start, current_counter+1):
             res.append(getattr(self.out, 
-            '{}_{}'.format(self._diff_name, str(self.ctx.diff_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
+            '{}_{}'.format(link_name, str(idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
         return res
 
-    def _get_last_fits(self, nr_of_calcs=1, diffusion_convergence_parameters_d=None):
-        if diffusion_convergence_parameters_d is None:
-            diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
-        res = []
-        for idx in range(nr_of_calcs):
-            res.append(getattr(self.out, 
-            '{}_{}'.format(self._fit_name, str(self.ctx.diff_counter-idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))))
-        return res
+    def _get_last_diffs(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
+        return self._get_last_calcs(self._diff_name, nr_of_calcs=nr_of_calcs,
+                                    diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
+    def _get_last_fits(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
+        return self._get_last_calcs(self._fit_name, nr_of_calcs=nr_of_calcs,
+                                    diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
 
     def start(self):
         # Now, I start by checking that I have all the parameters I need
@@ -382,16 +392,14 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             if optional_kw in inp_d:
                 lindiff_inp[optional_kw] = inp_d[optional_kw]
 
+        returndict = {}
         if self.ctx.diff_counter:
             coefs = self._get_last_fits(nr_of_calcs=1,
                     diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
-                    )[0].out.coefficients.get_attr('coefs')
-            parameters_main_d = inp_d['parameters_main'].get_dict()
-            parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
-            parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
-            parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
-            parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
-            lindiff_inp['parameters_main'] = get_or_create_parameters(parameters_main_d, store=True)
+                    )[0].out.coefficients
+            c, res = update_parameters_with_coefficients_inline(parameters=inp_d['parameters_main'], coefficients=coefs)
+            returndict['update_parameters_{}'.format(str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = c
+            lindiff_inp['parameters_main'] = res['updated_parameters']
         else:
             # In case there was no fitting done. I don't set anything in case
             # the user already gave a good guess of what the parameters are
@@ -404,7 +412,8 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
 
         self.goto(self.check)
         self.ctx.diff_counter += 1
-        return {'{}_{}'.format(self._diff_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0))):diff}
+        returndict['{}_{}'.format(self._diff_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])),str(0)))] = diff
+        return returndict
 
 
     def run_fit(self):
@@ -472,6 +481,6 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
                 self.goto(self.run_fit)
 
     def collect(self):
-        last_calc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)[-1]
+        last_calc = self._get_last_diffs(nr_of_calcs=1)[-1]
         self.goto(self.exit)
         return {'converged_msd_results':last_calc.out.msd_results}
