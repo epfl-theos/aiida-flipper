@@ -450,6 +450,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         return returndict
 
     def check(self):
+        import numpy as np
         diffusion_convergence_parameters_d =  self.inputs.diffusion_convergence_parameters.get_dict()
         lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
                     nr_of_calcs=1)[0]
@@ -472,11 +473,17 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             last_diff_calculations = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
                     nr_of_calcs=3)
 
-            diffusions = [calc.out.msd_results.get_attr(diffusion_convergence_parameters_d['species'])['diffusion_mean_cm2_s']
-                for calc in last_diff_calculations]
-            if ( max(diffusions) - min(diffusions) ) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
+            diffusions = np.array([calc.out.msd_results.get_attr(diffusion_convergence_parameters_d['species'])['diffusion_mean_cm2_s']
+                for calc in last_diff_calculations])
+            if diffusions.std() < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
                 # all good, I have converged!
                 self.goto(self.collect)
+            elif (
+                'diffusion_thr_cm2_s_rel' in diffusion_convergence_parameters_d and
+                abs(diffusions.mean()) >  1e-12 and # avoid division by 0
+                abs(diffusions.std()/diffusions.mean()) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel'] ):
+                # Checked relative convergence by dividing the standard deviation by the mean
+                self.got(self.collect)
             else:
                 self.goto(self.run_fit)
 
