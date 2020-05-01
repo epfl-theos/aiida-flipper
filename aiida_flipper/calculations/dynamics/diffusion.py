@@ -13,6 +13,7 @@ from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inlin
 USER = get_automatic_user()
 
 class DiffusionCalculation(ChillstepCalculation):
+
     def start(self):
         # Now, I start by checking that I have all the parameters I need
         # Don't need to check to much because the BranchingCalculations will validate
@@ -28,6 +29,7 @@ class DiffusionCalculation(ChillstepCalculation):
         self.goto(self.iterate)
         return {'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))) : calculation}
 
+
     def iterate(self):
         diffusion_parameters_d =  self.inputs.diffusion_parameters.get_dict()
         msd_parameters =  self.inputs.msd_parameters
@@ -41,11 +43,9 @@ class DiffusionCalculation(ChillstepCalculation):
             # I don't even care, I just launch the next!
             self.goto(self.launch_branching)
         elif diffusion_parameters_d['max_nr_of_branching'] < self.ctx.branching_counter:
-
             self.goto(self.collect)
         else:
             # Now let me calculate the diffusion coefficient that I get:
-            
             branches = self._get_branches()
             # I estimate the diffusion coefficients: without storing
             msd_results = get_diffusion_from_msd(
@@ -67,12 +67,12 @@ class DiffusionCalculation(ChillstepCalculation):
                 # the relative error is below my targe value
                 print "The relative error ( {} ) is below the target value ( {} )".format(sem_relative, sem_relative_target)
                 self.goto(self.collect)
-
             else:
                 print "The error has not converged"
                 print "absolute sem: {:.5e}  Target: {:.5e}".format(sem, sem_target)
                 print "relative sem: {:.5e}  Target: {:.5e}".format(sem_relative, sem_relative_target)
                 self.goto(self.launch_branching)
+
 
     def launch_branching(self):
         # Get the last calculation!
@@ -115,7 +115,7 @@ class DiffusionCalculation(ChillstepCalculation):
 
 
     def collect(self):
-        msd_parameters =  self.inputs.msd_parameters
+        msd_parameters = self.inputs.msd_parameters
         branches = self._get_branches()
         c, res = get_diffusion_from_msd_inline(
                     structure=self.inputs.structure,
@@ -131,6 +131,7 @@ class DiffusionCalculation(ChillstepCalculation):
 
         res['get_diffusion'] = c
         return res
+
 
     def _get_branches(self):
         qb = QueryBuilder()

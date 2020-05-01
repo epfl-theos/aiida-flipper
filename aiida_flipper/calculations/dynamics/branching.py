@@ -96,13 +96,13 @@ class BranchingCalculation(ChillstepCalculation):
                 raise Exception("Thermalizer failed")
             traj = self.out.thermalizer.out.total_trajectory
 
-            kwargs = dict(trajectory=traj, parameters=get_or_create_parameters(dict(
+            kwargs = dict(trajectory=traj,
+                          parameters=get_or_create_parameters(dict(
                             step_index=-1,
                             recenter=self.inputs.parameters_branching.dict.recenter_before_nvt,
                             create_settings=True,
-                            complete_missing=True)),
-                    structure=self.inp.structure)
-
+                            complete_missing=True), store=True),
+                          structure=self.inp.structure)
             try:
                 kwargs['settings'] = self.inp.settings
             except:
@@ -110,8 +110,8 @@ class BranchingCalculation(ChillstepCalculation):
 
             inlinec, res = get_structure_from_trajectory_inline(**kwargs)
             returnval['get_structure'] = inlinec
-            inp_d['settings']=res['settings']
-            inp_d['structure']=res['structure']
+            inp_d['settings'] = res['settings']
+            inp_d['structure'] = res['structure']
 
         returnval['slave_NVT'] = ReplayCalculation(**inp_d)
         returnval['slave_NVT'].label = '{}{}NVT'.format(self.label, '-' if self.label else '')
@@ -146,7 +146,7 @@ class BranchingCalculation(ChillstepCalculation):
                             step_index=idx,
                             recenter=self.inputs.parameters_branching.dict.recenter_before_nve,
                             create_settings=True,
-                            complete_missing=True),store=True))
+                            complete_missing=True), store=True))
             inlinec, res = get_structure_from_trajectory_inline(**kwargs)
             inp_d['settings']=res['settings']
             inp_d['structure']=res['structure']

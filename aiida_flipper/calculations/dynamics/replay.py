@@ -91,7 +91,7 @@ class ReplayCalculation(ChillstepCalculation):
             input_dict['IONS']['pot_extrapolation'] = 'second_order'
         # set the resources:
         try:
-            resources = {"num_machines":self.ctx.num_machines}
+            resources = {"num_machines": self.ctx.num_machines}
         except (KeyError, AttributeError):
             resources = self.inputs.moldyn_parameters.dict.resources
         calc.set_resources(resources)
@@ -146,6 +146,7 @@ class ReplayCalculation(ChillstepCalculation):
         self.ctx.lastcalc_uuid = calc.uuid
         self.goto(self.evaluate_calc)
         return return_d
+
 
     def evaluate_calc(self):
         lastcalc = load_node(self.ctx.lastcalc_uuid)
@@ -205,7 +206,6 @@ class ReplayCalculation(ChillstepCalculation):
                 self.goto(self.produce_output_trajectory)
 
 
-
     def produce_output_trajectory(self):
         qb = QueryBuilder()
         qb.append(ReplayCalculation, filters={'id':self.id}, tag='m')
@@ -228,6 +228,7 @@ class ReplayCalculation(ChillstepCalculation):
         self.goto(self.exit)
         return returnval
 
+
     def get_slave_calculations(self):
         """
         Returns a list of the calculations that was called by the WF, ordered.
@@ -239,6 +240,7 @@ class ReplayCalculation(ChillstepCalculation):
         sorted_calcs = sorted(d.items())
         return zip(*sorted_calcs)[1]
 
+
     def get_output_trajectory(self, store=False):
         # I don't even have to be finished,  for this
         qb = QueryBuilder()
@@ -248,8 +250,3 @@ class ReplayCalculation(ChillstepCalculation):
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
         return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']
 
-        
-        
-        
-        
-        

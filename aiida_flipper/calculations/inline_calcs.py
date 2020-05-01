@@ -6,7 +6,7 @@ from aiida.orm.data.parameter import ParameterData
 from math import ceil as math_ceil
 import numpy as np
 
-SINGULAR_TRAJ_KEYS = ('symbols','atomic_species_name')
+SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
 @optional_inline
 def remove_lithium_from_structure_inline(structure, parameters):
@@ -149,8 +149,13 @@ def concatenate_trajectory(**kwargs):
         if arrname in SINGULAR_TRAJ_KEYS:
             traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
         else:
-            traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
+            #traj.set_array(arrname, np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories]))
+            # concatenate arrays -- remove last step that is repeated when restarting, keep the very last
+            traj.set_array(arrname, np.concatenate([
+                np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories[:-1]]),
+                sorted_trajectories[-1].get_array(arrname)]))
     [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
+    traj._set_attr('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attr('timestep_in_fs'))
     return {'concatenated_trajectory':traj}
     
 

@@ -109,7 +109,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         #~ moldyn_params_d = self.inp.moldyn_parameters_main.get_dict()
         #~ moldyn_params_d['max_wallclock_seconds'] = self.ctx.walltime_seconds
         #~ moldyn_params_d['resources'] = {'num_machines':self.ctx.num_machines}
-        inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_main # get_or_create_parameters(moldyn_params_d, store=True)
+        inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_main
         #~ inp_d['code'] = Code.get_from_string(self.ctx.code_string)
         inp_d['parameters'] = self.inp.parameters_main
         returnval = {}
@@ -210,7 +210,11 @@ class LindiffusionCalculation(ChillstepCalculation):
             sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
             print mean_d, sem/mean_d, sem
             #~ return
-            if (sem < sem_target):
+            if (mean_d < 0.):
+                # the diffusion is negative: means that the value is not converged enough yet
+                print "The Diffusion coefficient ( {} +/- {} ) is negative, i.e. not converged.".format(mean_d, sem)
+                self.goto(self.run_replays)
+            elif (sem < sem_target):
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
                 print "The error ( {} ) is below the target value ( {} )".format(sem, sem_target)
                 self.goto(self.collect)
@@ -249,14 +253,15 @@ class LindiffusionCalculation(ChillstepCalculation):
 
     def show_msd_now_nosave(self, **kwargs):
         from aiida.orm.data.parameter import ParameterData
-        msd_parameters_d =  self.inputs.msd_parameters.get_dict()
+        msd_parameters_d = self.inputs.msd_parameters.get_dict()
         msd_parameters_d.update(kwargs)
         concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
         # I estimate the diffusion coefficients: without storing
-        get_diffusion_from_msd(
+        msd_results = get_diffusion_from_msd(
                 structure=self.inputs.structure,
                 parameters=ParameterData(dict=msd_parameters_d),
-                trajectory=concatenated_trajectory, plot_and_exit=True)
+                trajectory=concatenated_trajectory)
+        return msd_results
 
 
     def _get_trajectories(self):

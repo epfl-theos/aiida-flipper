@@ -1,3 +1,5 @@
+#!/usr/bin/env runaiida
+
 from delete_nodes import delete_nodes_serial
 from aiida.common.datastructures import calc_states
 from sqlalchemy.sql import text
