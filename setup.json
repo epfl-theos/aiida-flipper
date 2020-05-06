@@ -12,7 +12,8 @@
         "Development Status :: 4 - Beta"
     ],
     "install_requires": [
-        "aiida"
+        "aiida-core>=0.10.1",
+        "samos>=0.3.1"
     ],
     "entry_points": {
         "aiida.calculations": [

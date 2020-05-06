@@ -1,3 +1,6 @@
+#!/usr/bin/env runaiida
+# -*- coding: utf-8 -*- 
+
 def delete_nodes(pks_to_delete, ask_confirmation=True):
     """
     Delete a set of nodes.

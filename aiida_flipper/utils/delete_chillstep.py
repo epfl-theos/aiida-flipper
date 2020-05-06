@@ -1,3 +1,6 @@
+#!/usr/bin/env runaiida
+# -*- coding: utf-8 -*-
+
 from delete_nodes import delete_nodes_serial
 from aiida.common.links import LinkType
 from aiida.orm import load_node, Node
