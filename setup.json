@@ -1,7 +1,7 @@
 {
-    "version": "1.0.0",
+    "version": "2.0.0a1",
     "name": "aiida_flipper",
-    "url": "http://www.example.com",
+    "url": "",
     "license": "MIT License",
     "author": "Leonid Kahle",
     "author_email": "leonid.kahle@epfl.ch",
@@ -9,11 +9,12 @@
     "classifiers": [
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 3.7",
         "Development Status :: 4 - Beta"
     ],
     "install_requires": [
-        "aiida-core>=0.10.1",
-        "samos>=0.3.1"
+        "samos>=0.3.1",
+        "aiida_core[atomic_tools]>=1.0.0b1"
     ],
     "entry_points": {
         "aiida.calculations": [
@@ -26,6 +27,14 @@
         "aiida.parsers": [
             "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",
             "quantumespresso.pes = aiida_flipper.parsers.pes:PesParser"
+        ]
+    },
+    "extras_require": {
+        "pre-commit": [
+            "pre-commit==1.11.0",
+            "yapf==0.24.0",
+            "prospector==0.12.11",
+            "pylint==1.9.3"
         ]
     }
 }

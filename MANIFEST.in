@@ -1,0 +1,9 @@
+include *.json *.txt *.md
+include aiida_flipper/__init__.py
+recursive-include aiida_flipper/calculations *.py
+recursive-include aiida_flipper/parsers *.py
+prune tests
+prune aiida_flipper/calculations/dynamics
+prune aiida_flipper/utils
+prune aiida_flipper/workflows
+
