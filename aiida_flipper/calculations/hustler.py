@@ -1,22 +1,22 @@
 from __future__ import absolute_import
 import os, numpy as np
 
-from aiida.orm import CalculationFactory
+from aiida.plugins import CalculationFactory
 import six
 from six.moves import zip
 PwCalculation = CalculationFactory('quantumespresso.pw')
 from aiida_quantumespresso.calculations import get_input_data_text, _lowercase_dict, _uppercase_dict
 
 from aiida.common.utils import classproperty
-from aiida.orm.data.structure import StructureData
-from aiida.orm.data.array.kpoints import KpointsData
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm.data.array import ArrayData
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm.data.upf import UpfData
-from aiida.orm.data.remote import RemoteData
-from aiida.common.datastructures import CodeInfo, CalcInfo
-from aiida.common.exceptions import InputValidationError
+from aiida.orm import StructureData
+from aiida.orm.nodes.data.array.kpoints import KpointsData
+from aiida.orm.nodes.data.array.trajectory import TrajectoryData
+from aiida.orm.nodes.data.array import ArrayData
+from aiida.orm import Dict
+from aiida.orm.nodes.data.upf import UpfData
+from aiida.orm import RemoteData
+from aiida.common import CodeInfo, CalcInfo
+from aiida.common import InputValidationError
 from aiida.common.constants import bohr_to_ang
 
 
@@ -46,7 +46,7 @@ class HustlerCalculation(PwCalculation):
         }
         return retdict
 
-    def _prepare_for_submission(self, tempfolder, inputdict):
+    def prepare_for_submission(self, tempfolder, inputdict):
         """
         This is the routine to be called when you want to create
         the input files and related stuff with a plugin.

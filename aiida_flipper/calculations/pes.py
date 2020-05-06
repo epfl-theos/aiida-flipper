@@ -1,19 +1,19 @@
 from __future__ import absolute_import
 import os
 
-from aiida.orm import CalculationFactory
+from aiida.plugins import CalculationFactory
 import six
 from six.moves import zip
 PwCalculation = CalculationFactory('quantumespresso.pw')
 from aiida_quantumespresso.calculations import get_input_data_text, _lowercase_dict, _uppercase_dict
 
-from aiida.orm.data.structure import StructureData
-from aiida.orm.data.array.kpoints import KpointsData
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm.data.upf import UpfData
-from aiida.orm.data.remote import RemoteData
-from aiida.common.datastructures import CodeInfo, CalcInfo
-from aiida.common.exceptions import InputValidationError
+from aiida.orm import StructureData
+from aiida.orm.nodes.data.array.kpoints import KpointsData
+from aiida.orm import Dict
+from aiida.orm.nodes.data.upf import UpfData
+from aiida.orm import RemoteData
+from aiida.common import CodeInfo, CalcInfo
+from aiida.common import InputValidationError
 
 
 class PesCalculation(PwCalculation):
@@ -23,7 +23,7 @@ class PesCalculation(PwCalculation):
         self._default_parser = 'quantumespresso.pes'
         self._PES_FILE = 'potential.xsf'  #hardcoded into pinball version!
 
-    def _prepare_for_submission(self, tempfolder, inputdict):
+    def prepare_for_submission(self, tempfolder, inputdict):
         """
         This is the routine to be called when you want to create
         the input files and related stuff with a plugin.
