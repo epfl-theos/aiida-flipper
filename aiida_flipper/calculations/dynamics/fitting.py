@@ -149,9 +149,7 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
     
     sorted_positions = np.concatenate([t.get_positions() for t in sorted_trajectories])
     sorted_cells = np.concatenate([t.get_cells() for t in sorted_trajectories])
-    print sorted_positions.shape
     positions = structure.get_ase().positions
-    print positions.shape
 
     if 'indices_to_overwrite' in parameters_d:
         indices_to_overwrite = np.array(parameters_d['indices_to_overwrite'])
@@ -159,7 +157,7 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
         symbols = parameters_d['symbols_to_overwrite']
         if isinstance(symbols, (set, tuple, list)):
             pass
-        elif isinstance(symbols, str):
+        elif isinstance(symbols, basestring):
             symbols = [symbols]
         else:
             raise TypeError("Symbols has to be str or a list of strings")
@@ -420,7 +418,6 @@ class FittingCalculation(ChillstepCalculation):
             g,_ = Group.get_or_create(name=self.inp.parameters.dict.results_group_name)
             g.add_nodes(coefficients)
         except Exception as e:
-            print '!!!!!!!!!', e
             pass
         # TODO: CALL linkv
         self.goto(self.exit)
@@ -437,8 +434,6 @@ class FittingFromTrajectoryCalculation(FittingCalculation):
         Method to start (i.e. how to create the positions) 
         has to be defined by the subclass
         """
-        # So, I have a structure that should be at the energetic minumum.
-
         self.inp.structure
         self.inp.remote_folder_flipper
         # self.inp.electron_parameters

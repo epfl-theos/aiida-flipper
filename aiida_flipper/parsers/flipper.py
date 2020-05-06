@@ -150,7 +150,6 @@ class FlipperParser(Parser):
         for_file = os.path.join(out_folder.get_abs_path('.'), self._calc._FOR_FILE)
         vel_file = os.path.join(out_folder.get_abs_path('.'), self._calc._VEL_FILE)
 
-
         new_nodes_list = []
 
         ########################## OUTPUT FILE ##################################
@@ -450,8 +449,9 @@ class FlipperParser(Parser):
         # comment the following if you want this check.
         # For the hustler I don't want it
         if not calc_input.dict.CONTROL.get('lhustle', False):
-            for arr in (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures):
+            for idx, arr in enumerate((forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)):
                 if np.isnan(arr).any():
+                    print("Array {} contains NAN".format(idx))
                     successful = False
         
         return successful, new_nodes_list
