@@ -21,6 +21,23 @@
     types: [python]
     args: ["-i"]
 
+- repo: git://github.com/pre-commit/pre-commit-hooks
+  sha: v2.2.3
+  hooks:
+  - id: check-yaml
+  - id: check-merge-conflict
+  - id: check-symlinks
+  - id: check-json
+  - id: check-executables-have-shebangs
+  - id: double-quote-string-fixer
+  - id: end-of-file-fixer
+  - id: trailing-whitespace
+    exclude: >
+      (?x)^(
+        docs/.*|
+        examples/.*|
+      )$
+
 #  # prospector: collection of linters
 #  - id: prospector
 #    language: system

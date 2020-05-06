@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 import copy, os
 
 from aiida.backends.utils import get_authinfo
@@ -10,6 +11,7 @@ from aiida.orm.group import Group
 
 from aiida_flipper.utils import get_pseudos, get_suggested_cutoff
 from aiida_flipper.utils import get_or_create_parameters
+import six
 
 CHARGE_PARAMS_DICT = {
     u'CONTROL': {
@@ -23,26 +25,22 @@ CHARGE_PARAMS_DICT = {
 
 
 def copy_directory(remote_folder, parameters):
-    
+
     #~ print remote_folder, parameters
     RemoteData = DataFactory('remote')
     params_dict = parameters.get_dict()
-    computer_dest_name = params_dict.get('destination_computer_name',None)
+    computer_dest_name = params_dict.get('destination_computer_name', None)
     if computer_dest_name:
         computer_dest = Computer.get(computer_dest_name)
     else:
         computer_dest = remote_folder.get_computer()
-    t_dest = get_authinfo(computer=computer_dest,
-                          aiidauser=remote_folder.get_user()).get_transport()
+    t_dest = get_authinfo(computer=computer_dest, aiidauser=remote_folder.get_user()).get_transport()
     dest_dir = params_dict['destination_directory']
     # get the uuid of the parent calculation
     calc = remote_folder.inp.remote_folder
     calcuuid = calc.uuid
-    t_source = get_authinfo(computer=remote_folder.get_computer(),
-                            aiidauser=remote_folder.get_user()).get_transport()
+    t_source = get_authinfo(computer=remote_folder.get_computer(), aiidauser=remote_folder.get_user()).get_transport()
     source_dir = os.path.join(remote_folder.get_remote_path(), calc._OUTPUT_SUBFOLDER)
-
-
 
     with t_dest, t_source:
         # build the destination folder
@@ -59,8 +57,9 @@ def copy_directory(remote_folder, parameters):
         final_dest_dir = t_dest.getcwd()
         # copying files!
         t_source.copy(source_dir, final_dest_dir)
-    return {'copied_remote_folder': RemoteData(computer=computer_dest,
-                                       remote_path=final_dest_dir)}
+    return {'copied_remote_folder': RemoteData(computer=computer_dest, remote_path=final_dest_dir)}
+
+
 @make_inline
 def copy_directory_inline(**kwargs):
     """
@@ -79,8 +78,8 @@ def copy_directory_inline(**kwargs):
     return copy_directory(**kwargs)
 
 
-
 class SinglescfCalculation(ChillstepCalculation):
+
     def start(self):
         # I need 2 structures
         self.inp.pinball_structure
@@ -98,19 +97,19 @@ class SinglescfCalculation(ChillstepCalculation):
 
     def launch(self):
         # I launch the calculation
-        
+
         charge_calc_param_dict = copy.deepcopy(CHARGE_PARAMS_DICT)
         pseudofamily = self.inp.parameters.dict.pseudofamily
 
-        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) -  len(self.inp.delithiated_structure.sites)
-        pseudos=get_pseudos(
-                        structure=self.inp.pinball_structure,
-                        pseudo_family_name=pseudofamily,
-                )
-        ecutwfc, ecutrho = get_suggested_cutoff(pseudofamily, pseudos.values())
+        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) - len(self.inp.delithiated_structure.sites)
+        pseudos = get_pseudos(
+            structure=self.inp.pinball_structure,
+            pseudo_family_name=pseudofamily,
+        )
+        ecutwfc, ecutrho = get_suggested_cutoff(pseudofamily, list(pseudos.values()))
         #~ except Exception as e:
-            #~ print "WARNING: defaulting to default cutoffs" 
-            #~ ecutwfc, ecutrho = ECUTWFC_DEFAULT, ECUTRHO_DEFAULT
+        #~ print "WARNING: defaulting to default cutoffs"
+        #~ ecutwfc, ecutrho = ECUTWFC_DEFAULT, ECUTRHO_DEFAULT
         #~ for kind in set(pinball_structure.get_site_kindnames()).difference(delithiated_structure.get_site_kindnames()):
         # Remove Lithium from the pseudos
         pseudos.pop('Li')
@@ -123,24 +122,24 @@ class SinglescfCalculation(ChillstepCalculation):
         params = get_or_create_parameters(charge_calc_param_dict)
         calc = self.inp.code.new_calc()
 
-        calc.set_resources({"num_machines": self.inp.parameters.dict.num_machines})
+        calc.set_resources({'num_machines': self.inp.parameters.dict.num_machines})
         calc.set_max_wallclock_seconds(self.inp.parameters.dict.walltime_seconds)
         calc.use_parameters(params)
         calc.use_structure(self.inp.delithiated_structure)
         calc.use_settings(self.inp.settings)
         calc.use_kpoints(self.inp.kpoints)
-        
-        for k,v in pseudos.iteritems():
+
+        for k, v in six.iteritems(pseudos):
             calc.use_pseudo(v, k)
-        calc.label = "charge-{}".format(self.inp.delithiated_structure.label)
+        calc.label = 'charge-{}'.format(self.inp.delithiated_structure.label)
         self.goto(self.check)
-        return {'scf_calculation':calc}
+        return {'scf_calculation': calc}
 
     def check(self):
         subc = self.out.scf_calculation
         own_parameters_d = self.inp.parameters.get_dict()
         if subc.get_state() != calc_states.FINISHED:
-            raise Exception("My SCF-calculation {} failed".format(subc.uuid))
+            raise Exception('My SCF-calculation {} failed'.format(subc.uuid))
 
         returnd = {}
         calc_remote_folder = subc.out.remote_folder

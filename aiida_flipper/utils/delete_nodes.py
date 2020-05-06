@@ -1,5 +1,11 @@
 #!/usr/bin/env runaiida
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
+
+from __future__ import absolute_import
+from __future__ import print_function
+from six.moves import map
+from six.moves import input
+
 
 def delete_nodes(pks_to_delete, ask_confirmation=True):
     """
@@ -10,7 +16,7 @@ def delete_nodes(pks_to_delete, ask_confirmation=True):
 
     :param pks_to_delete: a list of the PKs of the nodes to delete
     """
-    raise Exception ("HAven't implemented things torun without the DbPath")
+    raise Exception("HAven't implemented things torun without the DbPath")
     from django.db import transaction
     from django.db.models import Q
     from aiida.backends.djsite.db import models
@@ -21,15 +27,13 @@ def delete_nodes(pks_to_delete, ask_confirmation=True):
     # all children nodes.
     all_pks_to_delete = set(pks_to_delete)
     for pk in pks_to_delete:
-        print pk
-        all_pks_to_delete.update(models.DbNode.objects.filter(
-            parents__in=pks_to_delete).values_list('pk', flat=True))
+        print(pk)
+        all_pks_to_delete.update(models.DbNode.objects.filter(parents__in=pks_to_delete).values_list('pk', flat=True))
 
-    print "I am going to delete {} nodes, including ALL THE CHILDREN".format(
-        len(all_pks_to_delete))
-    print "of the nodes you specified. Do you want to continue? [y/N]"
+    print('I am going to delete {} nodes, including ALL THE CHILDREN'.format(len(all_pks_to_delete)))
+    print('of the nodes you specified. Do you want to continue? [y/N]')
     if ask_confirmation:
-        answer = raw_input()
+        answer = input()
     else:
         answer = 'y'
 
@@ -42,9 +46,7 @@ def delete_nodes(pks_to_delete, ask_confirmation=True):
 
         with transaction.atomic():
             # Delete all links pointing to or from a given node
-            models.DbLink.objects.filter(
-                Q(input__in=all_pks_to_delete) |
-                Q(output__in=all_pks_to_delete)).delete()
+            models.DbLink.objects.filter(Q(input__in=all_pks_to_delete) | Q(output__in=all_pks_to_delete)).delete()
             # now delete nodes
             models.DbNode.objects.filter(pk__in=all_pks_to_delete).delete()
 
@@ -68,7 +70,6 @@ def get_all_children(node_pks, return_values=['id'], follow_calls=False, follow_
     except TypeError:
         the_node_pks = [node_pks]
 
-
     link_types_to_follow = [LinkType.CREATE.value, LinkType.INPUT.value]
     if follow_calls:
         link_types_to_follow.append(LinkType.CALL.value)
@@ -76,27 +77,24 @@ def get_all_children(node_pks, return_values=['id'], follow_calls=False, follow_
         link_types_to_follow.append(LinkType.RETURN.value)
     children = models.DbNode.objects.none()
     q_outputs = models.DbNode.aiidaobjects.filter(
-            inputs__pk__in=the_node_pks,
-            input_links__type__in=link_types_to_follow
-        ).distinct()
+        inputs__pk__in=the_node_pks, input_links__type__in=link_types_to_follow
+    ).distinct()
     #~ count = 0
     while q_outputs.count() > 0:
         #~ count += 1
         #~ print count
         outputs = list(q_outputs)
         children = q_outputs | children.all()
-        q_outputs = models.DbNode.aiidaobjects.filter(
-                inputs__in=outputs,
-                input_links__type__in=link_types_to_follow
-            ).distinct()
+        q_outputs = models.DbNode.aiidaobjects.filter(inputs__in=outputs,
+                                                      input_links__type__in=link_types_to_follow).distinct()
 
     #~ return children.filter(*args,**kwargs).distinct()
     return children.values_list(*return_values)
 
-def delete_nodes_serial(pks, follow_calls=False, follow_returns=False,
-        dry_run=False, force=False, time_order=True):
+
+def delete_nodes_serial(pks, follow_calls=False, follow_returns=False, dry_run=False, force=False, time_order=True):
     """
-    Delete a set of nodes in a serialway, if deleting a bunch of nodes together 
+    Delete a set of nodes in a serialway, if deleting a bunch of nodes together
     as above functions fails due to memory issues.
 
     :note: The script will also delete
@@ -114,11 +112,21 @@ def delete_nodes_serial(pks, follow_calls=False, follow_returns=False,
     # Here I get a set of all pks to actually delete, including
     # all children nodes.
     if not pks:
-        print "Nothing to delete"
+        print('Nothing to delete')
         return
 
     if time_order:
-        pks_to_delete = QueryBuilder().append(Node, project='id', filters={'id':{'in':pks}}, tag='n').order_by({'n':{'ctime':{ 'order':'desc'}}}).all()
+        pks_to_delete = QueryBuilder().append(Node, project='id', filters={
+            'id': {
+                'in': pks
+            }
+        }, tag='n').order_by({
+            'n': {
+                'ctime': {
+                    'order': 'desc'
+                }
+            }
+        }).all()
     else:
         pks_to_delete = pks
     #~ print "I was given {} valid pks".format(len(pks_to_delete))
@@ -129,20 +137,22 @@ def delete_nodes_serial(pks, follow_calls=False, follow_returns=False,
         try:
             #~ pks_set_to_delete.update(zip(*QueryBuilder().append(Node, filters={'id':pk}, tag='parent').append(Node, descendant_of='parent',project='id').all())[0])
             #~ pks_set_to_delete_1.update(zip(*QueryBuilder().append(Node, filters={'id':pk}, tag='parent').append(Node, descendant_of='parent',project='id').all())[0])
-            pks_set_to_delete.update(_ for _, in get_all_children(pk, follow_calls=follow_calls, follow_returns=follow_returns))
+            pks_set_to_delete.update(
+                _ for _, in get_all_children(pk, follow_calls=follow_calls, follow_returns=follow_returns)
+            )
         except IndexError:
             pass
         #~ print pks_set_to_delete
         #~ return
         #~ pks_set_to_delete.update(models.DbNode.objects.filter(
-            #~ parents__in=pks_to_delete).values_list('pk', flat=True)
-            #~ parents = pk).values_list('pk', flat=True))
+        #~ parents__in=pks_to_delete).values_list('pk', flat=True)
+        #~ parents = pk).values_list('pk', flat=True))
 
         if dry_run:
-            print "I would have deleted", " ".join(map(str, sorted(pks_set_to_delete)))
+            print('I would have deleted', ' '.join(map(str, sorted(pks_set_to_delete))))
             continue
-        print "I'm deleting", " ".join(map(str, sorted(pks_set_to_delete)))
-        if not(force) and raw_input("Continue?").lower() != 'y':
+        print("I'm deleting", ' '.join(map(str, sorted(pks_set_to_delete))))
+        if not (force) and input('Continue?').lower() != 'y':
             continue
 
         #~ print "Deleting",pk,"and parents", pks_set_to_delete_2
@@ -156,9 +166,7 @@ def delete_nodes_serial(pks, follow_calls=False, follow_returns=False,
 
         with transaction.atomic():
             # Delete all links pointing to or from a given node
-            models.DbLink.objects.filter(
-                Q(input__in=pks_set_to_delete) |
-                Q(output__in=pks_set_to_delete)).delete()
+            models.DbLink.objects.filter(Q(input__in=pks_set_to_delete) | Q(output__in=pks_set_to_delete)).delete()
             # now delete nodes
             models.DbNode.objects.filter(pk__in=pks_set_to_delete).delete()
 
@@ -166,7 +174,6 @@ def delete_nodes_serial(pks, follow_calls=False, follow_returns=False,
         # I can now delete the folders
         for f in folders:
             f.erase()
-
 
 
 if __name__ == '__main__':
@@ -185,4 +192,4 @@ if __name__ == '__main__':
     #~ if parsed_args.serial:
     delete_nodes_serial(**vars(parsed_args))
     #~ else:
-        #~ delete_nodes(parsed_args.pks, ask_confirmation=False)
+    #~ delete_nodes(parsed_args.pks, ask_confirmation=False)

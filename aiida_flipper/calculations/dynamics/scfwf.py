@@ -1,3 +1,5 @@
+from __future__ import absolute_import
+from __future__ import print_function
 import copy
 
 from aiida.common.datastructures import calc_states
@@ -51,7 +53,6 @@ class ScfwfCalculation(WorkChain):
         spec.output('remote_folder', valid_type=RemoteData)
         spec.output('retrieved', valid_type=FolderData)
 
-
     def setup(self):
         """
         Input validation and context setup
@@ -85,7 +86,7 @@ class ScfwfCalculation(WorkChain):
 
         # Add the van der Waals kernel table file if specified
         #~ if 'vdw_table' in self.inputs:
-            #~ self.ctx.inputs['vdw_table'] = self.inputs.vdw_table
+        #~ self.ctx.inputs['vdw_table'] = self.inputs.vdw_table
 
         # Set the correct relaxation scheme in the input parameters
         if 'CONTROL' not in self.ctx.inputs['parameters']:
@@ -101,7 +102,6 @@ class ScfwfCalculation(WorkChain):
         else:
             self.ctx.inputs['kpoints'] = self.inputs.kpoints
 
-
         return
 
     def should_run(self):
@@ -111,7 +111,6 @@ class ScfwfCalculation(WorkChain):
         threshold value.
         """
         return not self.ctx.is_converged
-
 
     def run_scf(self):
         """
@@ -132,14 +131,13 @@ class ScfwfCalculation(WorkChain):
         """
         Compare the cell volume of the relaxed structure of the last completed workchain with the previous.
         If the difference ratio is less than the volume convergence threshold we consider the cell relaxation
-        converged and can quit the workchain. If the 
+        converged and can quit the workchain. If the
         """
         try:
             workchain = self.ctx.workchains[-1]
         except IndexError:
             self.abort_nowait('the first iteration finished without returning a PwBaseWorkChain')
             return
-
 
         try:
             remote_folder = workchain.out.remote_folder
@@ -149,6 +147,7 @@ class ScfwfCalculation(WorkChain):
             return
 
         self.ctx.is_converged = True
+
     def results(self):
 
         self.report('I have reached the results')
@@ -162,10 +161,10 @@ class ScfwfCalculation(WorkChain):
             self.abort_nowait('the workchain {} probably failed'.format(workchain))
             return
 
-        print remote_folder, output_parameters
+        print(remote_folder, output_parameters)
         c, res = get_bands_and_occupations_inline(remote_folder=remote_folder, pw_output_parameters=output_parameters)
-        print c
-        print res
+        print(c)
+        print(res)
         occupations = res['output_band']
 
         self.report('I have output parameters {} and occupations {}'.format(output_parameters, occupations))

@@ -1,4 +1,5 @@
-
+from __future__ import absolute_import
+from __future__ import print_function
 from aiida.backends.utils import get_automatic_user
 
 from aiida.common.links import LinkType
@@ -11,6 +12,7 @@ from aiida_flipper.utils import get_or_create_parameters
 from aiida_flipper.calculations.inline_calcs import get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline
 
 USER = get_automatic_user()
+
 
 class DiffusionCalculation(ChillstepCalculation):
 
@@ -27,17 +29,25 @@ class DiffusionCalculation(ChillstepCalculation):
         calculation.label = '{}-branching-{}'.format(self.label, self.ctx.branching_counter)
         self.ctx.lastcalculation_uuid = calculation.uuid
         self.goto(self.iterate)
-        return {'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))) : calculation}
-
+        return {
+            'branching_{}'.format(
+                str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])), str(0))
+            ):
+            calculation
+        }
 
     def iterate(self):
-        diffusion_parameters_d =  self.inputs.diffusion_parameters.get_dict()
-        msd_parameters =  self.inputs.msd_parameters
+        diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
+        msd_parameters = self.inputs.msd_parameters
         #~ branches = self.get_branches()
         minimum_nr_of_branching = diffusion_parameters_d.get('min_nr_of_branching', 0)
-        lastcalc = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0))))
+        lastcalc = getattr(
+            self.out, 'branching_{}'.format(
+                str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])), str(0))
+            )
+        )
         if lastcalc.get_state() == 'FAILED':
-            raise Exception("Last branch {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
+            raise Exception('Last branch {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attr('fail_msg')))
 
         if minimum_nr_of_branching > self.ctx.branching_counter:
             # I don't even care, I just launch the next!
@@ -49,11 +59,11 @@ class DiffusionCalculation(ChillstepCalculation):
             branches = self._get_branches()
             # I estimate the diffusion coefficients: without storing
             msd_results = get_diffusion_from_msd(
-                    structure=self.inputs.structure,
-                    parameters=msd_parameters,
-                    **branches)['msd_results']
+                structure=self.inputs.structure, parameters=msd_parameters, **branches
+            )['msd_results']
             sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
-            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
+            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0])
+                                         )['diffusion_mean_cm2_s']
             sem_relative = sem / mean_d
             sem_target = diffusion_parameters_d['sem_threshold']
             sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
@@ -61,18 +71,21 @@ class DiffusionCalculation(ChillstepCalculation):
             #~ return
             if sem < sem_target:
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
-                print "The error ( {} ) is below the target value ( {} )".format(sem, sem_target)
+                print('The error ( {} ) is below the target value ( {} )'.format(sem, sem_target))
                 self.goto(self.collect)
             elif sem_relative < sem_relative_target:
                 # the relative error is below my targe value
-                print "The relative error ( {} ) is below the target value ( {} )".format(sem_relative, sem_relative_target)
+                print(
+                    'The relative error ( {} ) is below the target value ( {} )'.format(
+                        sem_relative, sem_relative_target
+                    )
+                )
                 self.goto(self.collect)
             else:
-                print "The error has not converged"
-                print "absolute sem: {:.5e}  Target: {:.5e}".format(sem, sem_target)
-                print "relative sem: {:.5e}  Target: {:.5e}".format(sem_relative, sem_relative_target)
+                print('The error has not converged')
+                print('absolute sem: {:.5e}  Target: {:.5e}'.format(sem, sem_target))
+                print('relative sem: {:.5e}  Target: {:.5e}'.format(sem_relative, sem_relative_target))
                 self.goto(self.launch_branching)
-
 
     def launch_branching(self):
         # Get the last calculation!
@@ -81,18 +94,22 @@ class DiffusionCalculation(ChillstepCalculation):
 
         inp_d = self.get_inputs_dict()
         diffusion_parameters_d = inp_d.pop('diffusion_parameters').get_dict()
-        nvt_replay = getattr(self.out, 'branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))).out.slave_NVT
-        kwargs = dict(trajectory=nvt_replay.out.total_trajectory,
-                    parameters=get_or_create_parameters(dict(
-                        step_index=-1,
-                        recenter=False,
-                        create_settings=True,
-                        complete_missing=True), store=True),
-                structure=self.inp.structure)
+        nvt_replay = getattr(
+            self.out, 'branching_{}'.format(
+                str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])), str(0))
+            )
+        ).out.slave_NVT
+        kwargs = dict(
+            trajectory=nvt_replay.out.total_trajectory,
+            parameters=get_or_create_parameters(
+                dict(step_index=-1, recenter=False, create_settings=True, complete_missing=True), store=True
+            ),
+            structure=self.inp.structure
+        )
         try:
             kwargs['settings'] = self.inp.settings
         except:
-            pass # settings will be None
+            pass  # settings will be None
 
         inlinec, res = get_structure_from_trajectory_inline(**kwargs)
         inp_d.pop('msd_parameters')
@@ -105,22 +122,22 @@ class DiffusionCalculation(ChillstepCalculation):
         self.ctx.lastcalculation_uuid = calculation.uuid
         returnvals = {}
         # return the inlinecalc to mark it as a slave. Give it the counter value before incrementing
-        returnvals['get_structure_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))] = inlinec
-        self.ctx.branching_counter +=1
+        returnvals['get_structure_{}'.format(
+            str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])), str(0))
+        )] = inlinec
+        self.ctx.branching_counter += 1
         calculation.label = '{}-branching-{}'.format(self.label, self.ctx.branching_counter)
         # Give it the value after incrementing!
-        returnvals['branching_{}'.format(str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])),str(0)))] = calculation
+        returnvals['branching_{}'.format(
+            str(self.ctx.branching_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_branching'])), str(0))
+        )] = calculation
         self.goto(self.iterate)
         return returnvals
-
 
     def collect(self):
         msd_parameters = self.inputs.msd_parameters
         branches = self._get_branches()
-        c, res = get_diffusion_from_msd_inline(
-                    structure=self.inputs.structure,
-                    parameters=msd_parameters,
-                    **branches)
+        c, res = get_diffusion_from_msd_inline(structure=self.inputs.structure, parameters=msd_parameters, **branches)
         self.goto(self.exit)
         try:
             # Maybe I'm supposed to store the result?
@@ -132,18 +149,34 @@ class DiffusionCalculation(ChillstepCalculation):
         res['get_diffusion'] = c
         return res
 
-
     def _get_branches(self):
         qb = QueryBuilder()
-        qb.append(DiffusionCalculation, filters={'id':self.id}, tag='b')
-        qb.append(BranchingCalculation, 
-                output_of='b',
-                edge_project='label',
-                edge_filters={'type':LinkType.CALL.value, 'label':{'like':'branching_%'}}, 
-                tag='c', edge_tag='mb' )
+        qb.append(DiffusionCalculation, filters={'id': self.id}, tag='b')
         qb.append(
-                TrajectoryData, output_of='c',
-                edge_filters={'type':LinkType.RETURN.value, 'label':{'like':'branch_%'}},
-                project='*', tag='t', edge_project='label', edge_tag='ct')
-        return {'{}-{}'.format(item['mb']['label'], item['ct']['label']):item['t']['*'] for item in qb.iterdict()}
-
+            BranchingCalculation,
+            output_of='b',
+            edge_project='label',
+            edge_filters={
+                'type': LinkType.CALL.value,
+                'label': {
+                    'like': 'branching_%'
+                }
+            },
+            tag='c',
+            edge_tag='mb'
+        )
+        qb.append(
+            TrajectoryData,
+            output_of='c',
+            edge_filters={
+                'type': LinkType.RETURN.value,
+                'label': {
+                    'like': 'branch_%'
+                }
+            },
+            project='*',
+            tag='t',
+            edge_project='label',
+            edge_tag='ct'
+        )
+        return {'{}-{}'.format(item['mb']['label'], item['ct']['label']): item['t']['*'] for item in qb.iterdict()}

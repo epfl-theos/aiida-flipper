@@ -1,5 +1,4 @@
-
-
+from __future__ import absolute_import
 from aiida.orm.calculation.chillstep.user.dynamics.branching import BranchingCalculation
 from aiida.orm.querybuilder import QueryBuilder
 from aiida.orm import DataFactory, Code, Computer
@@ -12,17 +11,43 @@ from copy import deepcopy
 from start_replay import structure, kpoints, pseudo_Si, parameters as parameters_thermalize
 
 
-
 def start_run():
-    
+
     parameter_d = deepcopy(parameters_thermalize.get_dict())
     parameter_d['IONS']['ion_velocities'] = 'from_input'
     parameters_nvt = ParameterData(dict=deepcopy(parameter_d))
     parameter_d['IONS']['ion_temperature'] = 'not_controlled'
-    parameters_nve=ParameterData(dict=deepcopy(parameter_d))
-    moldyn_parameters_thermalize=ParameterData(dict={'nstep':10, 'max_steps_percalc':50, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
-    moldyn_parameters_nvt=ParameterData(dict={'nstep':100, 'max_steps_percalc':60, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
-    moldyn_parameters_nve=ParameterData(dict={'nstep':20, 'max_steps_percalc':50, 'resources':{'num_machines':1}, 'max_wallclock_seconds':3600})
+    parameters_nve = ParameterData(dict=deepcopy(parameter_d))
+    moldyn_parameters_thermalize = ParameterData(
+        dict={
+            'nstep': 10,
+            'max_steps_percalc': 50,
+            'resources': {
+                'num_machines': 1
+            },
+            'max_wallclock_seconds': 3600
+        }
+    )
+    moldyn_parameters_nvt = ParameterData(
+        dict={
+            'nstep': 100,
+            'max_steps_percalc': 60,
+            'resources': {
+                'num_machines': 1
+            },
+            'max_wallclock_seconds': 3600
+        }
+    )
+    moldyn_parameters_nve = ParameterData(
+        dict={
+            'nstep': 20,
+            'max_steps_percalc': 50,
+            'resources': {
+                'num_machines': 1
+            },
+            'max_wallclock_seconds': 3600
+        }
+    )
     code = Code.get_from_string('flipper')
     bc = BranchingCalculation(
             structure=structure,pseudo_Si=pseudo_Si, kpoints=kpoints, # The generic stuff
@@ -32,7 +57,6 @@ def start_run():
             moldyn_parameters_thermalize=moldyn_parameters_thermalize, moldyn_parameters_nvt=moldyn_parameters_nvt, moldyn_parameters_nve=moldyn_parameters_nve,
         )
     bc.submit()
-
 
 
 if __name__ == '__main__':

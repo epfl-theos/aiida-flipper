@@ -1,4 +1,5 @@
-
+from __future__ import absolute_import
+from __future__ import print_function
 from aiida.orm import Code
 from aiida.orm.data.base import Str, Float, Bool
 from aiida.orm.data.folder import FolderData
@@ -16,20 +17,20 @@ from aiida.work.workchain import WorkChain, ToContext, if_, while_, append_
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida.workflows.user.epfl_theos.quantumespresso.pw import get_bands_and_occupations_inline
 
-
 # I say that a band is empty if it has less than a thousands of an electron:
 # Corresponds roughly to a 0.2 eV bandgap at 300K
 _OCCUPATION_THRESHOLD = 1e-3
 
+
 @optional_inline
 def check_if_insulator_inline(pw_output_parameters, occupations):
-    
+
     # TODO you need to check whether nelec = 2*nbands
     # Not the case for some calculations??
     # First I check whether I have an even number of electrons:
     nelec = pw_output_parameters.get_attr('number_of_electrons')
     results = {}
-    if ( nelec % 2):
+    if (nelec % 2):
         # I have an uneven number of electrons
         results['msg'] = 'uneven number of electrons'
         results['is_insulator'] = False
@@ -38,22 +39,22 @@ def check_if_insulator_inline(pw_output_parameters, occupations):
         # nkp is the number of kpoints
         # nbnd the number of bands
         nkp, nbnd = occup_arr.shape
-        # I sum over the kpoints of each band times 2 
-        occupation_p_band = occup_arr.sum(axis=0) / (2*nkp)
+        # I sum over the kpoints of each band times 2
+        occupation_p_band = occup_arr.sum(axis=0) / (2 * nkp)
         # Now I see what the occupation of the conduction band is:
-        cond_band_idx = int(nelec) / 2 + 1
+        cond_band_idx = int(nelec / 2) + 1
         lumo_occ = occupation_p_band[cond_band_idx]
         if lumo_occ > _OCCUPATION_THRESHOLD:
             results['is_insulator'] = False
             results['msg'] = 'Occupation of LUMO is above threshold'
         else:
-            results['is_insulator'] =  True
+            results['is_insulator'] = True
             # results['msg'] = 'Occupation of LUMO below threshold'
         results['threshold'] = _OCCUPATION_THRESHOLD
         results['lumo_occ'] = lumo_occ
-    return {'output_parameters':ParameterData(dict=results)}
-    
-    
+    return {'output_parameters': ParameterData(dict=results)}
+
+
 class SingleScfWorkChain(WorkChain):
     """
     Workchain to launch a Quantum Espresso pw.x to relax a structure
@@ -84,7 +85,6 @@ class SingleScfWorkChain(WorkChain):
         spec.output('output_parameters', valid_type=ParameterData)
         spec.output('remote_folder', valid_type=RemoteData)
         spec.output('occupations', valid_type=BandsData)
-
 
     def setup(self):
         """
@@ -119,7 +119,7 @@ class SingleScfWorkChain(WorkChain):
 
         # Add the van der Waals kernel table file if specified
         #~ if 'vdw_table' in self.inputs:
-            #~ self.ctx.inputs['vdw_table'] = self.inputs.vdw_table
+        #~ self.ctx.inputs['vdw_table'] = self.inputs.vdw_table
 
         # Set the correct relaxation scheme in the input parameters
         if 'CONTROL' not in self.ctx.inputs['parameters']:
@@ -135,7 +135,6 @@ class SingleScfWorkChain(WorkChain):
         else:
             self.ctx.inputs['kpoints'] = self.inputs.kpoints
 
-
         return
 
     def should_run(self):
@@ -144,8 +143,7 @@ class SingleScfWorkChain(WorkChain):
         change between two consecutive relaxation runs is larger than the specified volumen convergence
         threshold value.
         """
-        return not(self.ctx.is_converged)
-
+        return not (self.ctx.is_converged)
 
     def run_scf(self):
         """
@@ -166,7 +164,7 @@ class SingleScfWorkChain(WorkChain):
         """
         Compare the cell volume of the relaxed structure of the last completed workchain with the previous.
         If the difference ratio is less than the volume convergence threshold we consider the cell relaxation
-        converged and can quit the workchain. If the 
+        converged and can quit the workchain. If the
         """
         # Since I am not able to change anything, let's stop here!
         self.ctx.is_converged = True
@@ -176,7 +174,6 @@ class SingleScfWorkChain(WorkChain):
             # I have the suspicion that this this doesn't work! self.abort_nowait
             self.abort_nowait('the first iteration finished without returning a PwBaseWorkChain')
             return
-
 
         try:
             remote_folder = workchain.out.remote_folder
@@ -198,16 +195,19 @@ class SingleScfWorkChain(WorkChain):
         c, res = get_bands_and_occupations_inline(remote_folder=remote_folder, pw_output_parameters=output_parameters)
         occupations = res['output_band']
         res = check_if_insulator_inline(pw_output_parameters=output_parameters, occupations=occupations, store=True)
-        self.report('Based output parameters {} and occupations {} I judge this to be{} an insulator'.
-                format(output_parameters, occupations, ' NOT' if not(res['output_parameters'].get_attr('is_insulator')) else ''))
+        self.report(
+            'Based output parameters {} and occupations {} I judge this to be{} an insulator'.format(
+                output_parameters, occupations,
+                ' NOT' if not (res['output_parameters'].get_attr('is_insulator')) else ''
+            )
+        )
         self.out('occupations', occupations)
         self.out('output_parameters', res['output_parameters'])
         self.out('remote_folder', remote_folder)
-
 
 
 if __name__ == '__main__':
     from aiida.orm import load_node
     p = load_node(398054)
     b = load_node(398058)
-    print check_if_insulator_inline(pw_output_parameters=p, occupations=b)['output_parameters'].get_dict()
+    print(check_if_insulator_inline(pw_output_parameters=p, occupations=b)['output_parameters'].get_dict())

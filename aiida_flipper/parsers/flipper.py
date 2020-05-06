@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 
+from __future__ import absolute_import
+from __future__ import print_function
 from aiida.orm import CalculationFactory
-PwCalculation = CalculationFactory("quantumespresso.pw")
+from six.moves import map
+from six.moves import range
+PwCalculation = CalculationFactory('quantumespresso.pw')
 from aiida_quantumespresso.parsers.basicpw import BasicpwParser
-from aiida_quantumespresso.parsers.basic_raw_parser_pw  import convert_qe_time_to_sec
+from aiida_quantumespresso.parsers.basic_raw_parser_pw import convert_qe_time_to_sec
 
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.data.folder import FolderData
@@ -25,10 +29,8 @@ from aiida.parsers.parser import Parser
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 import os, numpy as np, re
 
-
 #~ NSTEP_REGEX = re.compile('^[ \t]*Entering Dynamics:')
 NSTEP_REGEX = re.compile('Entering[ \t]+Dynamics')
-
 
 WALLTIME_REGEX = re.compile(
     """
@@ -49,50 +51,59 @@ TIME_USED_REGEX = re.compile(
 #~ (?P<z> [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? )         # Get z
 #~ """, re.X | re.M)
 
-POS_REGEX_3 = re.compile("""
+POS_REGEX_3 = re.compile(
+    """
 ^                                                                             # Linestart
 [ \t]*                                                                        # Optional white space
 (?P<sym>[A-Za-z]+[A-Za-z0-9]*)                                             # get the symbol
 (?P<vals>(\s+ ([\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? )){3})
-""", re.X | re.M)
+""", re.X | re.M
+)
 
-POS_REGEX_12 = re.compile("""
+POS_REGEX_12 = re.compile(
+    """
 ^                                                                             # Linestart
 [ \t]*                                                                        # Optional white space
 (?P<sym>[A-Za-z]+[A-Za-z0-9]*)                                             # get the symbol
 (?P<vals>(\s+ ([\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? )){12})
-""", re.X | re.M)
+""", re.X | re.M
+)
 
-POS_REGEX_15 = re.compile("""
+POS_REGEX_15 = re.compile(
+    """
 ^                                                                             # Linestart
 [ \t]*                                                                        # Optional white space
 (?P<sym>[A-Za-z]+[A-Za-z0-9]*)                                             # get the symbol
 (?P<vals>(\s+ ([\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? )){15})
-""", re.X | re.M)
-
+""", re.X | re.M
+)
 
 #~ POS_BLOCK_REGEX = re.compile("""
 #~ ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?){3}\s*)+
 #~ """, re.X | re.M)
-POS_BLOCK_REGEX = re.compile("""
+POS_BLOCK_REGEX = re.compile(
+    """
 ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?)+\s*)+
-""", re.X | re.M)
+""", re.X | re.M
+)
 
-STRESS_REGEX = re.compile("""
+STRESS_REGEX = re.compile(
+    """
     total\s+stress.*[\n]
     (?P<vals>((\s+ ([\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? ) ){6}[\n]){3})
-    """, re.X|re.M)
+    """, re.X | re.M
+)
 
-          #~ total   stress  (Ry/bohr**3)                   (kbar)     P=    0.06
-   #~ 0.00000164   0.00000126  -0.00000083          0.24      0.19     -0.12
-   #~ 0.00000126  -0.00000004  -0.00000103          0.19     -0.01     -0.15
-  #~ -0.00000083  -0.00000103  -0.00000034         -0.12     -0.15     -0.05
+#~ total   stress  (Ry/bohr**3)                   (kbar)     P=    0.06
+#~ 0.00000164   0.00000126  -0.00000083          0.24      0.19     -0.12
+#~ 0.00000126  -0.00000004  -0.00000103          0.19     -0.01     -0.15
+#~ -0.00000083  -0.00000103  -0.00000034         -0.12     -0.15     -0.05
 
-
-F90_BOOL_DICT = {'T':True, 'F':False}
+F90_BOOL_DICT = {'T': True, 'F': False}
 
 
 class FlipperParser(Parser):
+
     def parse_with_retrieved(self, retrieved):
 
         # from carlo.codes.kohn.pw.pwimmigrant import get_nstep, get_warnings
@@ -110,11 +121,13 @@ class FlipperParser(Parser):
         # TODO: pass this input_dict to the parser. It might need it.
         input_dict = self._calc.inp.parameters.get_dict()
         try:
-            timestep_in_fs = 2*timeau_to_sec*1.0e15*input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1)
+            timestep_in_fs = 2 * timeau_to_sec * 1.0e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get(
+                'iprint', 1
+            )
         except KeyError:
             timestep_in_fs = None
         try:
-            nstep_thermo = input_dict['IONS']['nstep_thermo']*input_dict['CONTROL'].get('iprint', 1)
+            nstep_thermo = input_dict['IONS']['nstep_thermo'] * input_dict['CONTROL'].get('iprint', 1)
         except KeyError:
             nstep_thermo = None
         try:
@@ -126,9 +139,8 @@ class FlipperParser(Parser):
         try:
             out_folder = retrieved[self._calc._get_linkname_retrieved()]
         except KeyError:
-            self.logger.error("No retrieved folder found")
+            self.logger.error('No retrieved folder found')
             return False, ()
-
 
         # check what is inside the folder
         in_struc = self._calc.get_inputs_dict()['structure']
@@ -136,15 +148,15 @@ class FlipperParser(Parser):
 
         # at least the stdout should exist
         if not self._calc._OUTPUT_FILE_NAME in list_of_files:
-            self.logger.error("Standard output not found")
+            self.logger.error('Standard output not found')
             successful = False
             return successful, ()
         list_of_files.remove(self._calc._OUTPUT_FILE_NAME)
         for f in ('data-file.xml', '_scheduler-stdout.txt', '_scheduler-stderr.txt'):
             try:
                 list_of_files.remove(f)
-            except Exception as e :
-                print e
+            except Exception as e:
+                print(e)
         evp_file = os.path.join(out_folder.get_abs_path('.'), self._calc._EVP_FILE)
         pos_file = os.path.join(out_folder.get_abs_path('.'), self._calc._POS_FILE)
         for_file = os.path.join(out_folder.get_abs_path('.'), self._calc._FOR_FILE)
@@ -154,14 +166,10 @@ class FlipperParser(Parser):
 
         ########################## OUTPUT FILE ##################################
 
-        out_file = os.path.join(
-            out_folder.get_abs_path('.'),
-            self._calc._OUTPUT_FILE_NAME
-        )
+        out_file = os.path.join(out_folder.get_abs_path('.'), self._calc._OUTPUT_FILE_NAME)
         with open(out_file) as f:
             txt = f.read()
             #~ warnings, fatality = get_warnings(txt)
-
 
             match = TIME_USED_REGEX.search(txt)
             try:
@@ -178,7 +186,7 @@ class FlipperParser(Parser):
             except:
                 nstep = -1
             if input_dict['CONTROL'].get('tstress', False):
-                print 'reading stresses'
+                print('reading stresses')
                 stresses = list()
                 iprint = input_dict['CONTROL'].get('iprint', 1)
                 # I implement reading every iprint value only, to be consistent with
@@ -187,29 +195,29 @@ class FlipperParser(Parser):
                     if imatch % iprint:
                         continue
                     stress_vals = match.group('vals').split('\n')
-                    stress = np.empty((3,3))
+                    stress = np.empty((3, 3))
                     for i in range(3):
                         stress[i, :] = stress_vals[i].split()[:3]
                     stresses.append(stress)
                 stresses = np.array(stresses)
-                print stresses.shape
+                print(stresses.shape)
             else:
                 stresses = None
 
             del txt
 
         #~ if nstep==0:
-            #~ successful = False
-            #~ if warnings['MAX_CPU_TIME']:
-                #~ self.logger.error("No MD steps were done in the given CPU TIME")
-            #~ elif warnings['SCF_NOT_CONVERGED']:
-                #~ self.logger.error("SCF did not converge")
-            #~ else:
-                #~ self.logger.error("No MD step for unknown reason")
-            #~ return False, ()
+        #~ successful = False
+        #~ if warnings['MAX_CPU_TIME']:
+        #~ self.logger.error("No MD steps were done in the given CPU TIME")
+        #~ elif warnings['SCF_NOT_CONVERGED']:
+        #~ self.logger.error("SCF did not converge")
+        #~ else:
+        #~ self.logger.error("No MD step for unknown reason")
+        #~ return False, ()
 
         output_params = ParameterData(
-            dict = dict(
+            dict=dict(
                 #~ warnings=warnings,
                 cputime=cputime,
                 walltime=walltime,
@@ -224,27 +232,27 @@ class FlipperParser(Parser):
             try:
                 # Using np.genfromtxt instead of np.loadtxt, because this function
                 # gives NaN to a value it cannot read, and doesn't throw an error!
-                scalar_quantities = np.genfromtxt(f, usecols=range(1,8))
+                scalar_quantities = np.genfromtxt(f, usecols=list(range(1, 8)))
                 if scalar_quantities.shape[1] != 7:
-                    raise ValueError("Bad shape detected {}".format(scalar_quantities.shape))
+                    raise ValueError('Bad shape detected {}'.format(scalar_quantities.shape))
                 f.seek(0)
                 convergence = np.genfromtxt(f, dtype='S1', usecols=(8), converters={8: (lambda s: F90_BOOL_DICT[s])})
             except (ValueError, IndexError) as e:
                 # There was an error conversion, it has happened
                 # that '************' appears in an evp file....
-                print "There was an error: {}\nwhen reading {}".format(e, evp_file)
+                print('There was an error: {}\nwhen reading {}'.format(e, evp_file))
                 f.seek(0)
                 # Getting the length of the file
-                
+
                 for idx, line in enumerate(f.readlines()):
                     if len(line.split()) != 9:
                         break
                 # This is much slower, but the only way to things properly
                 try:
-                    scalar_quantities = np.empty((idx,8))
+                    scalar_quantities = np.empty((idx, 8))
                     convergence = np.empty(idx)
                 except NameError:
-                    raise OutputParsingError("Empty file {}".format(evp_file))
+                    raise OutputParsingError('Empty file {}'.format(evp_file))
                 f.seek(0)
                 for iline, line in enumerate(f.readlines()):
                     if (iline == idx):
@@ -263,26 +271,25 @@ class FlipperParser(Parser):
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
 
         if len(scalar_quantities) == 0:
-            raise OutputParsingError("No scalar quantities in output")
+            raise OutputParsingError('No scalar quantities in output')
 
         stepids = np.array(scalar_quantities[:, 0], dtype=int)
-        times = scalar_quantities[:,1]
-        kinetic_energies = scalar_quantities[:,2]
-        potential_energies = scalar_quantities[:,3]
-        total_energies = scalar_quantities[:,4]
-        temperatures = scalar_quantities[:,5]
-        walltimes = scalar_quantities[:,6]
-
+        times = scalar_quantities[:, 1]
+        kinetic_energies = scalar_quantities[:, 2]
+        potential_energies = scalar_quantities[:, 3]
+        total_energies = scalar_quantities[:, 4]
+        temperatures = scalar_quantities[:, 5]
+        walltimes = scalar_quantities[:, 6]
 
         if input_dict['CONTROL'].get('ldecompose_ewald', False):
             pos_regex_forces = POS_REGEX_15
-            ncol=15
+            ncol = 15
         elif input_dict['CONTROL'].get('ldecompose_forces', False):
             pos_regex_forces = POS_REGEX_12
-            ncol=12
+            ncol = 12
         else:
             pos_regex_forces = POS_REGEX_3
-            ncol=3
+            ncol = 3
 
         try:
             forces = get_coords_from_file(for_file, POS_BLOCK_REGEX, pos_regex_forces)
@@ -306,10 +313,7 @@ class FlipperParser(Parser):
         nat_set = set()
         # Removed check on dimenstions( 18.10.16 since forces can now be printed with decomposition
         #~ dimensions_set = set()
-        for arr in (
-                stepids, times, kinetic_energies, potential_energies,
-                total_energies, temperatures, walltimes
-            ):
+        for arr in (stepids, times, kinetic_energies, potential_energies, total_energies, temperatures, walltimes):
             nstep_set.add(len(arr))
         for arr in (positions, velocities, forces):
             n1, n2, n3 = arr.shape
@@ -320,43 +324,39 @@ class FlipperParser(Parser):
         #~ dimensions = dimensions_set.pop()
         if nat_set:
             raise OutputParsingError(
-                    "Incommensurate array shapes\n"
-                    "read from \n{}\n{}\n{}\n"
-                    "forces:            {}\n"
-                    "positions:         {}\n"
-                    "velocities:        {}\n".format(pos_file, vel_file, for_file, 
-                            positions.shape, velocities.shape, forces.shape
-                        )
-                    )
-
-    
-
+                'Incommensurate array shapes\n'
+                'read from \n{}\n{}\n{}\n'
+                'forces:            {}\n'
+                'positions:         {}\n'
+                'velocities:        {}\n'.format(
+                    pos_file, vel_file, for_file, positions.shape, velocities.shape, forces.shape
+                )
+            )
 
         # Now what if something was fucked up with the steps?
         # I think I can fix it by reducing every thing to the minumum number of states
 
-
         if len(nstep_set) > 1:
-            print(
-                    "Warning for  {} Incommensurate array shapes\n"
-                    "read from \n{}\n{}\n{}\n{}\n"
-                    "forces:            {}\n"
-                    "positions:         {}\n"
-                    "velocities:        {}\n"
-                    "stepids:           {}\n"
-                    "times:             {}\n"
-                    "kinetic_energies:  {}\n"
-                    "potential_energies:{}\n"
-                    "total_energies:    {}\n"
-                    "temperatures:      {}\n"
-                    "walltimes:         {}\n".format(self._calc, evp_file, pos_file, for_file, vel_file,
-                            forces.shape, positions.shape, velocities.shape,
-                            stepids.shape, times.shape, kinetic_energies.shape, potential_energies.shape,
-                            total_energies.shape, temperatures.shape, walltimes.shape
-                        )
-                    )
+            print((
+                'Warning for  {} Incommensurate array shapes\n'
+                'read from \n{}\n{}\n{}\n{}\n'
+                'forces:            {}\n'
+                'positions:         {}\n'
+                'velocities:        {}\n'
+                'stepids:           {}\n'
+                'times:             {}\n'
+                'kinetic_energies:  {}\n'
+                'potential_energies:{}\n'
+                'total_energies:    {}\n'
+                'temperatures:      {}\n'
+                'walltimes:         {}\n'.format(
+                    self._calc, evp_file, pos_file, for_file, vel_file, forces.shape, positions.shape, velocities.shape,
+                    stepids.shape, times.shape, kinetic_energies.shape, potential_energies.shape, total_energies.shape,
+                    temperatures.shape, walltimes.shape
+                )
+            ))
             nstep = min(nstep_set)
-            print "Trying to fix that by setting back every array to length = {}".format(nstep)
+            print('Trying to fix that by setting back every array to length = {}'.format(nstep))
             positions = positions[:nstep]
             velocities = velocities[:nstep]
             forces = forces[:nstep]
@@ -387,11 +387,11 @@ class FlipperParser(Parser):
             velocities=velocities,
         )
 
-        trajectory_data._set_attr('atoms',in_struc.get_site_kindnames())
+        trajectory_data._set_attr('atoms', in_struc.get_site_kindnames())
 
         if timestep_in_fs is not None:
-            trajectory_data._set_attr('timestep_in_fs',timestep_in_fs)
-            trajectory_data._set_attr('sim_time_fs',nstep*timestep_in_fs)
+            trajectory_data._set_attr('timestep_in_fs', timestep_in_fs)
+            trajectory_data._set_attr('sim_time_fs', nstep * timestep_in_fs)
         if nstep_thermo is not None:
             trajectory_data._set_attr('nstep_thermo', nstep_thermo)
         if temperature_thermostat is not None:
@@ -400,15 +400,13 @@ class FlipperParser(Parser):
         # Old: positions were stored in atomic coordinates, made conversions a bit messy,
         # and makes it hard to use some functions that suppose angstroms as units
         # trajectory_data._set_attr('units|positions','atomic')
-        trajectory_data._set_attr('units|positions','angstrom')
-        trajectory_data._set_attr('units|cells','angstrom')
-        trajectory_data._set_attr('units|velocities','atomic')
-
-
+        trajectory_data._set_attr('units|positions', 'angstrom')
+        trajectory_data._set_attr('units|cells', 'angstrom')
+        trajectory_data._set_attr('units|velocities', 'atomic')
 
         # FORCES:
         trajectory_data.set_array('forces', forces)
-        trajectory_data._set_attr('units|forces','atomic')
+        trajectory_data._set_attr('units|forces', 'atomic')
 
         # TIMES
         trajectory_data.set_array('times', times)
@@ -418,10 +416,8 @@ class FlipperParser(Parser):
         trajectory_data.set_array('kinetic_energies', kinetic_energies)
         trajectory_data._set_attr('units|kinetic_energies', 'Ry')
 
-
         trajectory_data.set_array('potential_energies', potential_energies)
         trajectory_data._set_attr('units|potential_energies', 'Ry')
-
 
         trajectory_data.set_array('total_energies', total_energies)
         trajectory_data._set_attr('units|total_energies', 'Ry')
@@ -445,15 +441,16 @@ class FlipperParser(Parser):
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
 
-
         # comment the following if you want this check.
         # For the hustler I don't want it
         if not calc_input.dict.CONTROL.get('lhustle', False):
-            for idx, arr in enumerate((forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)):
+            for idx, arr in enumerate(
+                (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)
+            ):
                 if np.isnan(arr).any():
-                    print("Array {} contains NAN".format(idx))
+                    print(('Array {} contains NAN'.format(idx)))
                     successful = False
-        
+
         return successful, new_nodes_list
 
     def get_parser_settings_key(self):
@@ -492,22 +489,17 @@ class FlipperParser(Parser):
         return 'output_kpoints'
 
 
-
 def get_nstep_from_outputf(text):
     return len(list(NSTEP_REGEX.finditer(text)))
 
 
 def get_coords_from_file(filename, pos_block_regex, pos_regex):
     with open(filename) as f:
-        coords = np.array(
-            [
-                [
-                    map(float, coord_match.group('vals').split())
-                    for coord_match in pos_regex.finditer(match.group(0))
-                ]
-                for match in pos_block_regex.finditer(f.read())
-            ], dtype=np.float64
-        )
+        coords = np.array([[
+            list(map(float,
+                     coord_match.group('vals').split())) for coord_match in pos_regex.finditer(match.group(0))
+        ] for match in pos_block_regex.finditer(f.read())],
+                          dtype=np.float64)
     return coords
 
 
@@ -525,25 +517,24 @@ def get_coords_from_file_slow_and_steady(filename, ncol):
                 # We have a new timestep
                 timestep = list()
             else:
-                vals = line.split()[1:] # Ignoring the first column, which is the symbol
+                vals = line.split()[1:]  # Ignoring the first column, which is the symbol
                 if len(vals) != ncol:
-                    raise Exception("This line ({}) linenr {} has the wrong numbner of columns".format(line, iline))
+                    raise Exception('This line ({}) linenr {} has the wrong numbner of columns'.format(line, iline))
                 else:
                     try:
                         npvals = np.empty(ncol)
-                        for ival,val in enumerate(vals):
+                        for ival, val in enumerate(vals):
                             try:
                                 npvals[ival] = float(val)
                             except ValueError:
                                 npvals[ival] = np.nan
-                        timestep.append(npvals) # TODO: Exceptions...
+                        timestep.append(npvals)  # TODO: Exceptions...
                     except Exception as e:
                         raise Exception(
-                            "An exception \n{}\noccured when "
-                            "parsing line {} of \n{}"
-                            "".format(e, iline, filename))
+                            'An exception \n{}\noccured when '
+                            'parsing line {} of \n{}'
+                            ''.format(e, iline, filename)
+                        )
         # Append the last timestep
         trajectory.append(timestep)
     return np.array(trajectory, dtype=np.float64)
-    
-    
