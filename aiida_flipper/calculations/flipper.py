@@ -26,7 +26,7 @@ class FlipperCalculation(PwCalculation):
         :return: `aiida.common.datastructures.CalcInfo` instance
         """
         calcinfo = super(FlipperCalculation, self).prepare_for_submission(folder)
-        verlet_files = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self.POS_FILE]
+        verlet_files = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE]
         try:
             calcinfo.retrieve_temporary_list += verlet_files
         except AttributeError:
@@ -126,6 +126,12 @@ class FlipperCalculation(PwCalculation):
         # In that one, for unknown reasons, the atomic_species card is sorted alphabetically.
         # The pinball code requires the pinball species to be the first species!
         atomic_species_card = ''.join(['ATOMIC_SPECIES\n'] + list(atomic_species_card_list))
+
+        # The format of mapping_species required later is a dictionary, whose
+        # values are the indices, so I convert to this format
+        # Note the (idx+1) to convert to fortran 1-based lists
+        mapping_species = {sp_name: (idx + 1) for idx, sp_name in enumerate(kind_names)}
+
         # Free memory
         del atomic_species_card_list
 
