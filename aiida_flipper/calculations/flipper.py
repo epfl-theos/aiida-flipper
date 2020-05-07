@@ -4,17 +4,11 @@ import os
 import six
 from six.moves import zip
 
+from aiida.common import exceptions
+
 from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict
 from aiida_quantumespresso.calculations.pw import PwCalculation
-
-from aiida.orm import StructureData
-from aiida.orm.nodes.data.array.kpoints import KpointsData
-from aiida.orm import Dict
-from aiida.orm.nodes.data.upf import UpfData
-from aiida.orm import RemoteData
-from aiida.common import CodeInfo, CalcInfo
-from aiida.common import InputValidationError
-
+from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 class FlipperCalculation(PwCalculation):
 
