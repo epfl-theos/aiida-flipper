@@ -4,7 +4,8 @@ import os
 import six
 from six.moves import zip
 
-from aiida_quantumespresso.calculations.pw import PwCalculation, _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations.pw import PwCalculation
 
 from aiida.orm import StructureData
 from aiida.orm.nodes.data.array.kpoints import KpointsData
@@ -14,12 +15,13 @@ from aiida.orm import RemoteData
 from aiida.common import CodeInfo, CalcInfo
 from aiida.common import InputValidationError
 
+
 class FlipperCalculation(PwCalculation):
 
-    self._EVP_FILE = 'verlet.evp'
-    self._FOR_FILE = 'verlet.for'
-    self._VEL_FILE = 'verlet.vel'
-    self._POS_FILE = 'verlet.pos'
+    _EVP_FILE = 'verlet.evp'
+    _FOR_FILE = 'verlet.for'
+    _VEL_FILE = 'verlet.vel'
+    _POS_FILE = 'verlet.pos'
 
     def prepare_for_submission(self, folder):
         """
@@ -64,12 +66,12 @@ class FlipperCalculation(PwCalculation):
             if namelist in input_params:
                 # The following lines is meant to avoid putting in input the
                 # parameters like celldm(*)
-                stripped_inparams = [re.sub('[(0-9)]', '', _)
-                                     for _ in input_params[namelist].keys()]
+                stripped_inparams = [re.sub('[(0-9)]', '', _) for _ in input_params[namelist].keys()]
                 if flag in stripped_inparams:
                     raise exceptions.InputValidationError(
                         "You cannot specify explicitly the '{}' flag in the '{}' "
-                        'namelist or card.'.format(flag, namelist))
+                        'namelist or card.'.format(flag, namelist)
+                    )
                 if defaultvalue is not None:
                     if namelist not in input_params:
                         input_params[namelist] = {}
@@ -87,8 +89,7 @@ class FlipperCalculation(PwCalculation):
         # ------------ CELL_PARAMETERS -----------
         cell_parameters_card = 'CELL_PARAMETERS angstrom\n'
         for vector in structure.cell:
-            cell_parameters_card += ('{0:18.10f} {1:18.10f} {2:18.10f}'
-                                     '\n'.format(*vector))
+            cell_parameters_card += ('{0:18.10f} {1:18.10f} {2:18.10f}' '\n'.format(*vector))
 
         # ------------- ATOMIC_SPECIES ------------
         atomic_species_card_list = []
@@ -107,9 +108,11 @@ class FlipperCalculation(PwCalculation):
             # the list of keys of pseudos and kinds coincides
             pseudo = pseudos[kind.name]
             if kind.is_alloy or kind.has_vacancies:
-                raise exceptions.InputValidationError("Kind '{}' is an alloy or has "
-                                           'vacancies. This is not allowed for pw.x input structures.'
-                                           ''.format(kind.name))
+                raise exceptions.InputValidationError(
+                    "Kind '{}' is an alloy or has "
+                    'vacancies. This is not allowed for pw.x input structures.'
+                    ''.format(kind.name)
+                )
 
             try:
                 # If it is the same pseudopotential file, use the same filename
@@ -128,8 +131,7 @@ class FlipperCalculation(PwCalculation):
         # Below is a change with respect to the original PwCalculation plugin.
         # In that one, for unknown reasons, the atomic_species card is sorted alphabetically.
         # The pinball code requires the pinball species to be the first species!
-        atomic_species_card = ''.join(['ATOMIC_SPECIES\n'] +
-                                           list(atomic_species_card_list))
+        atomic_species_card = ''.join(['ATOMIC_SPECIES\n'] + list(atomic_species_card_list))
         # Free memory
         del atomic_species_card_list
 
@@ -144,23 +146,21 @@ class FlipperCalculation(PwCalculation):
             if len(fixed_coords) != len(structure.sites):
                 raise exceptions.InputValidationError(
                     'Input structure contains {:d} sites, but '
-                    'fixed_coords has length {:d}'.format(len(structure.sites),
-                                                          len(fixed_coords)))
+                    'fixed_coords has length {:d}'.format(len(structure.sites), len(fixed_coords))
+                )
 
             for i, this_atom_fix in enumerate(fixed_coords):
                 if len(this_atom_fix) != 3:
-                    raise exceptions.InputValidationError(
-                        'fixed_coords({:d}) has not length three'
-                        ''.format(i + 1))
+                    raise exceptions.InputValidationError('fixed_coords({:d}) has not length three' ''.format(i + 1))
                 for fixed_c in this_atom_fix:
                     if not isinstance(fixed_c, bool):
                         raise exceptions.InputValidationError(
                             'fixed_coords({:d}) has non-boolean '
-                            'elements'.format(i + 1))
+                            'elements'.format(i + 1)
+                        )
 
                 if_pos_values = [cls._if_pos(_) for _ in this_atom_fix]
-                fixed_coords_strings.append(
-                    '  {:d} {:d} {:d}'.format(*if_pos_values))
+                fixed_coords_strings.append('  {:d} {:d} {:d}'.format(*if_pos_values))
 
         abs_pos = [_.position for _ in structure.sites]
         if use_fractional:
@@ -171,12 +171,12 @@ class FlipperCalculation(PwCalculation):
             atomic_positions_card_list = ['ATOMIC_POSITIONS angstrom\n']
             coordinates = abs_pos
 
-        for site, site_coords, fixed_coords_string in zip(
-                structure.sites, coordinates, fixed_coords_strings):
+        for site, site_coords, fixed_coords_string in zip(structure.sites, coordinates, fixed_coords_strings):
             atomic_positions_card_list.append(
                 '{0} {1:18.10f} {2:18.10f} {3:18.10f} {4}\n'.format(
-                    site.kind_name.ljust(6), site_coords[0], site_coords[1],
-                    site_coords[2], fixed_coords_string))
+                    site.kind_name.ljust(6), site_coords[0], site_coords[1], site_coords[2], fixed_coords_string
+                )
+            )
 
         atomic_positions_card = ''.join(atomic_positions_card_list)
         del atomic_positions_card_list
@@ -262,10 +262,10 @@ class FlipperCalculation(PwCalculation):
                     if num_kpoints == 0:
                         raise exceptions.InputValidationError(
                             'At least one k point must be '
-                            'provided for non-gamma calculations')
+                            'provided for non-gamma calculations'
+                        )
                 except AttributeError:
-                    raise exceptions.InputValidationError(
-                        'No valid kpoints have been found')
+                    raise exceptions.InputValidationError('No valid kpoints have been found')
 
                 try:
                     _, weights = kpoints.get_kpoints(also_weights=True)
@@ -276,17 +276,18 @@ class FlipperCalculation(PwCalculation):
 
             if gamma_only:
                 if has_mesh:
-                    if tuple(mesh) != (1, 1, 1) or tuple(offset) != (
-                            0., 0., 0.):
+                    if tuple(mesh) != (1, 1, 1) or tuple(offset) != (0., 0., 0.):
                         raise exceptions.InputValidationError(
                             'If a gamma_only calculation is requested, the '
-                            'kpoint mesh must be (1,1,1),offset=(0.,0.,0.)')
+                            'kpoint mesh must be (1,1,1),offset=(0.,0.,0.)'
+                        )
 
                 else:
                     if (len(kpoints_list) != 1 or tuple(kpoints_list[0]) != tuple(0., 0., 0.)):
                         raise exceptions.InputValidationError(
                             'If a gamma_only calculation is requested, the '
-                            'kpoints coordinates must only be (0.,0.,0.)')
+                            'kpoints coordinates must only be (0.,0.,0.)'
+                        )
 
                 kpoints_type = 'gamma'
 
@@ -303,8 +304,7 @@ class FlipperCalculation(PwCalculation):
                     raise exceptions.InputValidationError('offset list must only be made of 0 or 0.5 floats')
                 the_offset = [0 if i == 0. else 1 for i in offset]
                 the_6_integers = list(mesh) + the_offset
-                kpoints_card_list.append('{:d} {:d} {:d} {:d} {:d} {:d}\n'
-                                         ''.format(*the_6_integers))
+                kpoints_card_list.append('{:d} {:d} {:d} {:d} {:d} {:d}\n' ''.format(*the_6_integers))
 
             elif kpoints_type == 'gamma':
                 # nothing to be written in this case
@@ -314,7 +314,8 @@ class FlipperCalculation(PwCalculation):
                 for kpoint, weight in zip(kpoints_list, weights):
                     kpoints_card_list.append(
                         '  {:18.10f} {:18.10f} {:18.10f} {:18.10f}'
-                        '\n'.format(kpoint[0], kpoint[1], kpoint[2], weight))
+                        '\n'.format(kpoint[0], kpoint[1], kpoint[2], weight)
+                    )
 
             kpoints_card = ''.join(kpoints_card_list)
             del kpoints_card_list
@@ -325,7 +326,8 @@ class FlipperCalculation(PwCalculation):
             if not isinstance(namelists_toprint, list):
                 raise exceptions.InputValidationError(
                     "The 'NAMELISTS' value, if specified in the settings input "
-                    'node, must be a list of strings')
+                    'node, must be a list of strings'
+                )
         except KeyError:  # list of namelists not specified; do automatic detection
             try:
                 control_nl = input_params['CONTROL']
@@ -335,15 +337,18 @@ class FlipperCalculation(PwCalculation):
                     "No 'calculation' in CONTROL namelist."
                     'It is required for automatic detection of the valid list '
                     'of namelists. Otherwise, specify the list of namelists '
-                    "using the NAMELISTS key inside the 'settings' input node.")
+                    "using the NAMELISTS key inside the 'settings' input node."
+                )
 
             try:
                 namelists_toprint = cls._automatic_namelists[calculation_type]
             except KeyError:
-                raise exceptions.InputValidationError("Unknown 'calculation' value in "
-                                           'CONTROL namelist {}. Otherwise, specify the list of '
-                                           "namelists using the NAMELISTS inside the 'settings' input "
-                                           'node'.format(calculation_type))
+                raise exceptions.InputValidationError(
+                    "Unknown 'calculation' value in "
+                    'CONTROL namelist {}. Otherwise, specify the list of '
+                    "namelists using the NAMELISTS inside the 'settings' input "
+                    'node'.format(calculation_type)
+                )
 
         inputfile = u''
         for namelist_name in namelists_toprint:
@@ -365,6 +370,7 @@ class FlipperCalculation(PwCalculation):
             raise exceptions.InputValidationError(
                 'The following namelists are specified in input_params, but are '
                 'not valid namelists for the current type of calculation: '
-                '{}'.format(','.join(list(input_params.keys()))))
+                '{}'.format(','.join(list(input_params.keys())))
+            )
 
         return inputfile, local_copy_list_to_append
