@@ -2,32 +2,35 @@
 
 from __future__ import absolute_import
 from __future__ import print_function
-from aiida.orm import CalculationFactory
+
 from six.moves import map
 from six.moves import range
-PwCalculation = CalculationFactory('quantumespresso.pw')
-from aiida_quantumespresso.parsers.basicpw import BasicpwParser
-from aiida_quantumespresso.parsers.basic_raw_parser_pw import convert_qe_time_to_sec
 
-from aiida.orm.data.parameter import ParameterData
-from aiida.orm.data.folder import FolderData
-from aiida.parsers.parser import Parser
+import os, numpy as np, re
 
-from aiida.common.datastructures import calc_states
-from aiida.common.exceptions import UniquenessError
-from aiida.orm.data.array import ArrayData
-from aiida.orm.data.array.kpoints import KpointsData
+from aiida import orm
 
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm.data.array import ArrayData
-from aiida.common.utils import xyz_parser_iterator
-from aiida.common.constants import bohr_to_ang, timeau_to_sec
+from aiida_quantumespresso.parsers.pw import PwParser
+# ~ from aiida_quantumespresso.parsers.basic_raw_parser_pw import convert_qe_time_to_sec
 
-from aiida.parsers.exceptions import OutputParsingError
-from aiida.parsers.parser import Parser
+# ~ from aiida.orm.data.parameter import ParameterData
+# ~ from aiida.orm.data.folder import FolderData
+# ~ from aiida.parsers.parser import Parser
+
+# ~ from aiida.common.datastructures import calc_states
+# ~ from aiida.common.exceptions import UniquenessError
+# ~ from aiida.orm.data.array import ArrayData
+# ~ from aiida.orm.data.array.kpoints import KpointsData
+
+# ~ from aiida.orm.data.array.trajectory import TrajectoryData
+# ~ from aiida.orm.data.array import ArrayData
+# ~ from aiida.common.utils import xyz_parser_iterator
+# ~ from aiida.common.constants import bohr_to_ang, timeau_to_sec
+
+# ~ from aiida.parsers.exceptions import OutputParsingError
+# ~ from aiida.parsers.parser import Parser
 
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
-import os, numpy as np, re
 
 #~ NSTEP_REGEX = re.compile('^[ \t]*Entering Dynamics:')
 NSTEP_REGEX = re.compile('Entering[ \t]+Dynamics')
@@ -102,11 +105,9 @@ STRESS_REGEX = re.compile(
 F90_BOOL_DICT = {'T': True, 'F': False}
 
 
-class FlipperParser(Parser):
+class FlipperParser(PwParser):
 
-    def parse_with_retrieved(self, retrieved):
-
-        # from carlo.codes.kohn.pw.pwimmigrant import get_nstep, get_warnings
+    def parse(self, **kwargs):
         successful = True
 
         calc_input = self._calc.inp.parameters
@@ -453,12 +454,6 @@ class FlipperParser(Parser):
 
         return successful, new_nodes_list
 
-    def get_parser_settings_key(self):
-        """
-        Return the name of the key to be used in the calculation settings, that
-        contains the dictionary with the parser_options
-        """
-        return 'parser_options'
 
     def get_linkname_outstructure(self):
         """
