@@ -45,7 +45,6 @@ class FlipperCalculation(BasePwCpInputGenerator):
     # Not using symlink in pw to allow multiple nscf to run on top of the same scf
     _default_symlink_usage = False
 
-
     _EVP_FILE = 'verlet.evp'
     _FOR_FILE = 'verlet.for'
     _VEL_FILE = 'verlet.vel'
@@ -118,6 +117,14 @@ class FlipperCalculation(BasePwCpInputGenerator):
             message='The parser raised an unexpected exception.')
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
             message='The parser could not get the timestep in the calculation.')
+        spec.exit_code(370, 'ERROR_EMPTY_TRAJECTORY_FILES',
+            message='The trajectory files are empty (do not contain values)')
+        spec.exit_code(371, 'ERROR_CORRUPTED_TRAJECTORY_FILES',
+            message='The trajectory files cannot be read')
+        spec.exit_code(372, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSIONS',
+            message='The trajectory files cannot be read')
+        spec.exit_code(373, 'ERROR_TRAJECTORY_WITH_NAN',
+            message='The trajectory files cannot be read')
 
         # Significant errors but calculation can be used to restart
         # ~ spec.exit_code(400, 'ERROR_OUT_OF_WALLTIME',
@@ -166,11 +173,7 @@ class FlipperCalculation(BasePwCpInputGenerator):
         :return: `aiida.common.datastructures.CalcInfo` instance
         """
         calcinfo = super(FlipperCalculation, self).prepare_for_submission(folder)
-        verlet_files = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE]
-        try:
-            calcinfo.retrieve_temporary_list += verlet_files
-        except AttributeError:
-            calcinfo.retrieve_temporary_list = verlet_files
+        calcinfo.retrieve_temporary_list = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE]
         return calcinfo
 
     @classmethod

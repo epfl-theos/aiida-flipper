@@ -10,7 +10,6 @@ import os, numpy as np, re
 
 from aiida import orm
 
-from aiida_quantumespresso.parsers.pw import PwParser
 # ~ from aiida_quantumespresso.parsers.basic_raw_parser_pw import convert_qe_time_to_sec
 
 # ~ from aiida.orm.data.parameter import ParameterData
@@ -30,7 +29,8 @@ from aiida_quantumespresso.parsers.pw import PwParser
 # ~ from aiida.parsers.parser import Parser
 
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
-
+from aiida_quantumespresso.parsers.pw import PwParser
+from aiida_flipper.calculations.flipper import FlipperCalculation
 from qe_tools.constants import bohr_to_ang, timeau_to_sec
 
 
@@ -44,14 +44,7 @@ WALLTIME_REGEX = re.compile(
 TIME_USED_REGEX = re.compile(
     'PWSCF[ \t]*\:[ \t]+(?P<cputime>[A-Za-z0-9\. ]+)[ ]+CPU[ ]+(?P<walltime>[A-Za-z0-9\. ]+)[ ]+WALL'
 )
-#~ POS_REGEX = re.compile("""
-#~ ^                                                                             # Linestart
-#~ [ \t]*                                                                        # Optional white space
-#~ (?P<sym>[A-Za-z]+[A-Za-z0-9]*)\s+                                             # get the symbol
-#~ (?P<x> [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? ) [ \t]+  # Get x
-#~ (?P<y> [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? ) [ \t]+  # Get y
-#~ (?P<z> [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)? )         # Get z
-#~ """, re.X | re.M)
+
 
 POS_REGEX_3 = re.compile(
     """
@@ -80,9 +73,6 @@ POS_REGEX_15 = re.compile(
 """, re.X | re.M
 )
 
-#~ POS_BLOCK_REGEX = re.compile("""
-#~ ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?){3}\s*)+
-#~ """, re.X | re.M)
 POS_BLOCK_REGEX = re.compile(
     """
 ([A-Za-z]+[A-Za-z0-9]*\s+([ \t]+ [\-|\+]?  ( \d*[\.]\d+  | \d+[\.]?\d* )  ([E | e][+|-]?\d+)?)+\s*)+
@@ -96,12 +86,8 @@ STRESS_REGEX = re.compile(
     """, re.X | re.M
 )
 
-#~ total   stress  (Ry/bohr**3)                   (kbar)     P=    0.06
-#~ 0.00000164   0.00000126  -0.00000083          0.24      0.19     -0.12
-#~ 0.00000126  -0.00000004  -0.00000103          0.19     -0.01     -0.15
-#~ -0.00000083  -0.00000103  -0.00000034         -0.12     -0.15     -0.05
-
-F90_BOOL_DICT = {'T': True, 'F': False}
+# T, F for python2, b'T', b'F' for python3
+F90_BOOL_DICT = {'T': True, 'F': False, b'T': True, b'F': False}
 
 
 class FlipperParser(PwParser):
@@ -119,95 +105,71 @@ class FlipperParser(PwParser):
         calc_input_dict = self.node.inputs.parameters.get_dict()
         input_dict = self.node.inputs.parameters.get_dict()
         try:
+            # This referes to the SAMPLING timestep for the trajectory:
             timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get(
                 'iprint', 1)
         except KeyError:
             return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
 
         in_struc = self.node.inputs.structure
+        print(self.node.get_retrieve_temporary_list())
 
         list_of_files = self.retrieved.list_object_names()
-        # at least the stdout should exist
+        # the stdout should exist
         filename_stdout = self.node.get_attribute('output_filename')
-
         if filename_stdout not in list_of_files:
              return self.exit_codes.ERROR_OUTPUT_STDOUT_MISSING
+
 
         for f in ('data-file.xml', '_scheduler-stdout.txt', '_scheduler-stderr.txt'):
             if f in list_of_files:
                 list_of_files.remove(f)
 
-        evp_file = os.path.join(out_folder.get_abs_path('.'), self._calc._EVP_FILE)
-        pos_file = os.path.join(out_folder.get_abs_path('.'), self._calc._POS_FILE)
-        for_file = os.path.join(out_folder.get_abs_path('.'), self._calc._FOR_FILE)
-        vel_file = os.path.join(out_folder.get_abs_path('.'), self._calc._VEL_FILE)
+        try:
+            temp_folder = kwargs['retrieved_temporary_folder']
+        except KeyError:
+            return self.exit(self.exit_codes.ERROR_NO_RETRIEVED_TEMPORARY_FOLDER)
+        print(self.node)
+        evp_file = os.path.join(temp_folder, FlipperCalculation._EVP_FILE)
+        pos_file = os.path.join(temp_folder, FlipperCalculation._POS_FILE)
+        for_file = os.path.join(temp_folder, FlipperCalculation._FOR_FILE)
+        vel_file = os.path.join(temp_folder, FlipperCalculation._VEL_FILE)
 
         new_nodes_list = []
-
         ########################## OUTPUT FILE ##################################
+        stdout_txt = self.retrieved.get_object_content(filename_stdout)
 
-        out_file = os.path.join(out_folder.get_abs_path('.'), self._calc._OUTPUT_FILE_NAME)
-        with open(out_file) as f:
-            txt = f.read()
-            #~ warnings, fatality = get_warnings(txt)
+        match = TIME_USED_REGEX.search(stdout_txt)
+        try:
+            cputime = convert_qe_time_to_sec(match.group('cputime'))
+        except:
+            cputime = -1.
+        try:
+            walltime = convert_qe_time_to_sec(match.group('walltime'))
+        except:
+            walltime = -1.
+        if input_dict['CONTROL'].get('tstress', False):
+            stresses = list()
+            iprint = input_dict['CONTROL'].get('iprint', 1)
+            # I implement reading every iprint value only, to be consistent with
+            # everything else being printed
+            for imatch, match in enumerate(STRESS_REGEX.finditer(stdout_txt)):
+                if imatch % iprint:
+                    continue
+                stress_vals = match.group('vals').split('\n')
+                stress = np.empty((3, 3))
+                for i in range(3):
+                    stress[i, :] = stress_vals[i].split()[:3]
+                stresses.append(stress)
+            stresses = np.array(stresses)
+        else:
+            stresses = None
+        del stdout_txt
 
-            match = TIME_USED_REGEX.search(txt)
-            try:
-                cputime = convert_qe_time_to_sec(match.group('cputime'))
-            except:
-                cputime = -1.
-            try:
-                walltime = convert_qe_time_to_sec(match.group('walltime'))
-            except:
-                walltime = -1.
-            try:
-                # TODO: This does not work!!
-                nstep = get_nstep_from_outputf(txt)
-            except:
-                nstep = -1
-            if input_dict['CONTROL'].get('tstress', False):
-                print('reading stresses')
-                stresses = list()
-                iprint = input_dict['CONTROL'].get('iprint', 1)
-                # I implement reading every iprint value only, to be consistent with
-                # everything else being printed
-                for imatch, match in enumerate(STRESS_REGEX.finditer(txt)):
-                    if imatch % iprint:
-                        continue
-                    stress_vals = match.group('vals').split('\n')
-                    stress = np.empty((3, 3))
-                    for i in range(3):
-                        stress[i, :] = stress_vals[i].split()[:3]
-                    stresses.append(stress)
-                stresses = np.array(stresses)
-                print(stresses.shape)
-            else:
-                stresses = None
-
-            del txt
-
-        #~ if nstep==0:
-        #~ successful = False
-        #~ if warnings['MAX_CPU_TIME']:
-        #~ self.logger.error("No MD steps were done in the given CPU TIME")
-        #~ elif warnings['SCF_NOT_CONVERGED']:
-        #~ self.logger.error("SCF did not converge")
-        #~ else:
-        #~ self.logger.error("No MD step for unknown reason")
-        #~ return False, ()
-
-        output_params = ParameterData(
-            dict=dict(
-                #~ warnings=warnings,
-                cputime=cputime,
-                walltime=walltime,
-                nstep=nstep
-            )
-        )
-        new_nodes_list.append((self.get_linkname_outparams(), output_params))
-
+        self.out('output_parameters', orm.Dict(
+            dict=dict(cputime=cputime, walltime=walltime,)))
+        
         ########################## TRAJECTORY #################################
-
         with open(evp_file) as f:
             try:
                 # Using np.genfromtxt instead of np.loadtxt, because this function
@@ -220,19 +182,18 @@ class FlipperParser(PwParser):
             except (ValueError, IndexError) as e:
                 # There was an error conversion, it has happened
                 # that '************' appears in an evp file....
-                print('There was an error: {}\nwhen reading {}'.format(e, evp_file))
                 f.seek(0)
                 # Getting the length of the file
 
                 for idx, line in enumerate(f.readlines()):
                     if len(line.split()) != 9:
                         break
-                # This is much slower, but the only way to things properly
+                # This is much slower, but the only way to do things properly
                 try:
                     scalar_quantities = np.empty((idx, 8))
                     convergence = np.empty(idx)
                 except NameError:
-                    raise OutputParsingError('Empty file {}'.format(evp_file))
+                    return self.exit_codes.ERROR_EMPTY_TRAJECTORY_FILES
                 f.seek(0)
                 for iline, line in enumerate(f.readlines()):
                     if (iline == idx):
@@ -247,11 +208,9 @@ class FlipperParser(PwParser):
                         convergence[iline] = F90_BOOL_DICT[line.split()[8]]
                     except KeyError:
                         convergence[iline] = np.nan
-                # print scalar_quantities[-1,:]
-                # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
 
         if len(scalar_quantities) == 0:
-            raise OutputParsingError('No scalar quantities in output')
+            return self.exit_codes.ERROR_CORRUPTED_TRAJECTORY_FILES
 
         stepids = np.array(scalar_quantities[:, 0], dtype=int)
         times = scalar_quantities[:, 1]
@@ -270,7 +229,6 @@ class FlipperParser(PwParser):
         else:
             pos_regex_forces = POS_REGEX_3
             ncol = 3
-
         try:
             forces = get_coords_from_file(for_file, POS_BLOCK_REGEX, pos_regex_forces)
         except ValueError:
@@ -287,71 +245,24 @@ class FlipperParser(PwParser):
         except ValueError:
             velocities = get_coords_from_file_slow_and_steady(vel_file, 3)
 
-        trajectory_data = TrajectoryData()
 
         nstep_set = set()
         nat_set = set()
-        # Removed check on dimenstions( 18.10.16 since forces can now be printed with decomposition
-        #~ dimensions_set = set()
+
         for arr in (stepids, times, kinetic_energies, potential_energies, total_energies, temperatures, walltimes):
             nstep_set.add(len(arr))
+
         for arr in (positions, velocities, forces):
-            n1, n2, n3 = arr.shape
+            n1, n2, _ = arr.shape
             nstep_set.add(n1)
             nat_set.add(n2)
-            #~ dimensions_set.add(n3)
         nat = nat_set.pop()
+        nstep = nstep_set.pop()
         #~ dimensions = dimensions_set.pop()
-        if nat_set:
-            raise OutputParsingError(
-                'Incommensurate array shapes\n'
-                'read from \n{}\n{}\n{}\n'
-                'forces:            {}\n'
-                'positions:         {}\n'
-                'velocities:        {}\n'.format(
-                    pos_file, vel_file, for_file, positions.shape, velocities.shape, forces.shape
-                )
-            )
+        if nat_set or nstep_set:
+            return self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSIONS
 
-        # Now what if something was fucked up with the steps?
-        # I think I can fix it by reducing every thing to the minumum number of states
-
-        if len(nstep_set) > 1:
-            print((
-                'Warning for  {} Incommensurate array shapes\n'
-                'read from \n{}\n{}\n{}\n{}\n'
-                'forces:            {}\n'
-                'positions:         {}\n'
-                'velocities:        {}\n'
-                'stepids:           {}\n'
-                'times:             {}\n'
-                'kinetic_energies:  {}\n'
-                'potential_energies:{}\n'
-                'total_energies:    {}\n'
-                'temperatures:      {}\n'
-                'walltimes:         {}\n'.format(
-                    self._calc, evp_file, pos_file, for_file, vel_file, forces.shape, positions.shape, velocities.shape,
-                    stepids.shape, times.shape, kinetic_energies.shape, potential_energies.shape, total_energies.shape,
-                    temperatures.shape, walltimes.shape
-                )
-            ))
-            nstep = min(nstep_set)
-            print('Trying to fix that by setting back every array to length = {}'.format(nstep))
-            positions = positions[:nstep]
-            velocities = velocities[:nstep]
-            forces = forces[:nstep]
-            stepids = stepids[:nstep]
-            times = times[:nstep]
-            kinetic_energies = kinetic_energies[:nstep]
-            potential_energies = potential_energies[:nstep]
-            total_energies = total_energies[:nstep]
-            temperatures = temperatures[:nstep]
-            walltimes = walltimes[:nstep]
-
-        else:
-            nstep = nstep_set.pop()
-
-        cells = np.array([in_struc.cell] * nstep)
+        # cells = np.array([in_struc.cell] * nstep)
         symbols = np.array([str(i.kind_name) for i in in_struc.sites[:nat]])
 
         # Transforming bohr to angstrom, because this is mostly what's being used in AiiDA.
@@ -359,105 +270,67 @@ class FlipperParser(PwParser):
         # Maybe in the future, we should have Angstrom/fs ?
         positions *= bohr_to_ang
 
+        trajectory_data = orm.TrajectoryData()
+
         trajectory_data.set_trajectory(
             stepids=stepids,
-            cells=cells,
+            # cells=cells,
             symbols=symbols,
             positions=positions,
             velocities=velocities,
         )
 
-        trajectory_data._set_attr('atoms', in_struc.get_site_kindnames())
-        trajectory_data._set_attr('timestep_in_fs', timestep_in_fs)
+        trajectory_data.set_attribute('atoms', symbols)
+        trajectory_data.set_attribute('timestep_in_fs', timestep_in_fs)
 
         # Old: positions were stored in atomic coordinates, made conversions a bit messy,
         # and makes it hard to use some functions that suppose angstroms as units
         # trajectory_data._set_attr('units|positions','atomic')
-        trajectory_data._set_attr('units|positions', 'angstrom')
-        trajectory_data._set_attr('units|cells', 'angstrom')
-        trajectory_data._set_attr('units|velocities', 'atomic')
+        trajectory_data.set_attribute('units|positions', 'angstrom')
+        # trajectory_data.set_attribute('units|cells', 'angstrom')
+        trajectory_data.set_attribute('units|velocities', 'atomic')
 
         # FORCES:
         trajectory_data.set_array('forces', forces)
-        trajectory_data._set_attr('units|forces', 'atomic')
+        trajectory_data.set_attribute('units|forces', 'atomic')
 
         # TIMES
         trajectory_data.set_array('times', times)
-        trajectory_data._set_attr('units|times', 'ps')
+        trajectory_data.set_attribute('units|times', 'ps')
 
         # ENERGIES
         trajectory_data.set_array('kinetic_energies', kinetic_energies)
-        trajectory_data._set_attr('units|kinetic_energies', 'Ry')
+        trajectory_data.set_attribute('units|kinetic_energies', 'Ry')
 
         trajectory_data.set_array('potential_energies', potential_energies)
-        trajectory_data._set_attr('units|potential_energies', 'Ry')
+        trajectory_data.set_attribute('units|potential_energies', 'Ry')
 
         trajectory_data.set_array('total_energies', total_energies)
-        trajectory_data._set_attr('units|total_energies', 'Ry')
+        trajectory_data.set_attribute('units|total_energies', 'Ry')
 
         # TEMPERATURES
         trajectory_data.set_array('temperatures', temperatures)
-        trajectory_data._set_attr('units|temperatures', 'K')
+        trajectory_data.set_attribute('units|temperatures', 'K')
 
         # WALLTIMES
         trajectory_data.set_array('walltimes', walltimes)
-        trajectory_data._set_attr('units|walltimes', 's')
+        trajectory_data.set_attribute('units|walltimes', 's')
 
         # SCF convergence
         trajectory_data.set_array('scf_convergence', convergence)
 
         # STRESSES
         if stresses is not None:
-            trajectory_data._set_attr('units|stresses', 'atomic')
             trajectory_data.set_array('stresses', stresses)
-        ## DONE
+            trajectory_data.set_attribute('units|stresses', 'atomic')
 
-        new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
-
-        # comment the following if you want this check.
-        # For the hustler I don't want it
-        if not calc_input.dict.CONTROL.get('lhustle', False):
+        if not calc_input_dict['CONTROL'].get('lhustle', False):
             for idx, arr in enumerate(
-                (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)
-            ):
+                (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)):
                 if np.isnan(arr).any():
-                    print(('Array {} contains NAN'.format(idx)))
-                    successful = False
+                    return self.exit_codes.ERROR_TRAJECTORY_WITH_NAN
+        self.out('output_trajectory', trajectory_data)
 
-        return successful, new_nodes_list
-
-
-    def get_linkname_outstructure(self):
-        """
-        Returns the name of the link to the output_structure
-        Node exists if positions or cell changed.
-        """
-        return 'output_structure'
-
-    def get_linkname_outtrajectory(self):
-        """
-        Returns the name of the link to the output_trajectory.
-        Node exists in case of calculation='md', 'vc-md', 'relax', 'vc-relax'
-        """
-        return 'output_trajectory'
-
-    def get_linkname_outarray(self):
-        """
-        Returns the name of the link to the output_array
-        Node may exist in case of calculation='scf'
-        """
-        return 'output_array'
-
-    def get_linkname_out_kpoints(self):
-        """
-        Returns the name of the link to the output_kpoints
-        Node exists if cell has changed and no bands are stored.
-        """
-        return 'output_kpoints'
-
-
-def get_nstep_from_outputf(text):
-    return len(list(NSTEP_REGEX.finditer(text)))
 
 
 def get_coords_from_file(filename, pos_block_regex, pos_regex):
