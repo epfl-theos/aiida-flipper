@@ -116,6 +116,8 @@ class FlipperCalculation(BasePwCpInputGenerator):
                     'scheduler before the files were safely written to disk for a potential restart.')
         spec.exit_code(350, 'ERROR_UNEXPECTED_PARSER_EXCEPTION',
             message='The parser raised an unexpected exception.')
+        spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
+            message='The parser could not get the timestep in the calculation.')
 
         # Significant errors but calculation can be used to restart
         # ~ spec.exit_code(400, 'ERROR_OUT_OF_WALLTIME',

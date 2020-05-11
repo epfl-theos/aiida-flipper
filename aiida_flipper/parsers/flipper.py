@@ -25,15 +25,14 @@ from aiida_quantumespresso.parsers.pw import PwParser
 # ~ from aiida.orm.data.array.trajectory import TrajectoryData
 # ~ from aiida.orm.data.array import ArrayData
 # ~ from aiida.common.utils import xyz_parser_iterator
-# ~ from aiida.common.constants import bohr_to_ang, timeau_to_sec
 
 # ~ from aiida.parsers.exceptions import OutputParsingError
 # ~ from aiida.parsers.parser import Parser
 
 #~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 
-#~ NSTEP_REGEX = re.compile('^[ \t]*Entering Dynamics:')
-NSTEP_REGEX = re.compile('Entering[ \t]+Dynamics')
+from qe_tools.constants import bohr_to_ang, timeau_to_sec
+
 
 WALLTIME_REGEX = re.compile(
     """
@@ -108,56 +107,36 @@ F90_BOOL_DICT = {'T': True, 'F': False}
 class FlipperParser(PwParser):
 
     def parse(self, **kwargs):
-        successful = True
 
-        calc_input = self._calc.inp.parameters
-
-        # look for eventual flags of the parser
-        try:
-            parser_opts = self._calc.inp.settings.get_dict()[self.get_parser_settings_key()]
-        except (AttributeError, KeyError):
-            parser_opts = {}
-
-        # load the input dictionary
-        # TODO: pass this input_dict to the parser. It might need it.
-        input_dict = self._calc.inp.parameters.get_dict()
-        try:
-            timestep_in_fs = 2 * timeau_to_sec * 1.0e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get(
-                'iprint', 1
-            )
-        except KeyError:
-            timestep_in_fs = None
-        try:
-            nstep_thermo = input_dict['IONS']['nstep_thermo'] * input_dict['CONTROL'].get('iprint', 1)
-        except KeyError:
-            nstep_thermo = None
-        try:
-            temperature_thermostat = input_dict['IONS'].get('tempw', None)
-        except KeyError:
-            temperature_thermostat = None
 
         # Check that the retrieved folder is there
         try:
-            out_folder = retrieved[self._calc._get_linkname_retrieved()]
+            out_folder = self.retrieved
+        except exceptions.NotExistent:
+            return self.exit(self.exit(self.exit_codes.ERROR_NO_RETRIEVED_FOLDER))
+
+
+        calc_input_dict = self.node.inputs.parameters.get_dict()
+        input_dict = self.node.inputs.parameters.get_dict()
+        try:
+            timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get(
+                'iprint', 1)
         except KeyError:
-            self.logger.error('No retrieved folder found')
-            return False, ()
+            return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
 
-        # check what is inside the folder
-        in_struc = self._calc.get_inputs_dict()['structure']
-        list_of_files = out_folder.get_folder_list()
+        in_struc = self.node.inputs.structure
 
+        list_of_files = self.retrieved.list_object_names()
         # at least the stdout should exist
-        if not self._calc._OUTPUT_FILE_NAME in list_of_files:
-            self.logger.error('Standard output not found')
-            successful = False
-            return successful, ()
-        list_of_files.remove(self._calc._OUTPUT_FILE_NAME)
+        filename_stdout = self.node.get_attribute('output_filename')
+
+        if filename_stdout not in list_of_files:
+             return self.exit_codes.ERROR_OUTPUT_STDOUT_MISSING
+
         for f in ('data-file.xml', '_scheduler-stdout.txt', '_scheduler-stderr.txt'):
-            try:
+            if f in list_of_files:
                 list_of_files.remove(f)
-            except Exception as e:
-                print(e)
+
         evp_file = os.path.join(out_folder.get_abs_path('.'), self._calc._EVP_FILE)
         pos_file = os.path.join(out_folder.get_abs_path('.'), self._calc._POS_FILE)
         for_file = os.path.join(out_folder.get_abs_path('.'), self._calc._FOR_FILE)
@@ -389,14 +368,7 @@ class FlipperParser(PwParser):
         )
 
         trajectory_data._set_attr('atoms', in_struc.get_site_kindnames())
-
-        if timestep_in_fs is not None:
-            trajectory_data._set_attr('timestep_in_fs', timestep_in_fs)
-            trajectory_data._set_attr('sim_time_fs', nstep * timestep_in_fs)
-        if nstep_thermo is not None:
-            trajectory_data._set_attr('nstep_thermo', nstep_thermo)
-        if temperature_thermostat is not None:
-            trajectory_data._set_attr('temperature_thermostat', temperature_thermostat)
+        trajectory_data._set_attr('timestep_in_fs', timestep_in_fs)
 
         # Old: positions were stored in atomic coordinates, made conversions a bit messy,
         # and makes it hard to use some functions that suppose angstroms as units
