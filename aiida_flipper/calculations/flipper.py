@@ -117,51 +117,20 @@ class FlipperCalculation(BasePwCpInputGenerator):
             message='The parser raised an unexpected exception.')
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
             message='The parser could not get the timestep in the calculation.')
-        spec.exit_code(370, 'ERROR_EMPTY_TRAJECTORY_FILES',
+        spec.exit_code(370, 'ERROR_MISSING_TRAJECTORY_FILES',
+            message='At least one of trajectory files is missing')
+        spec.exit_code(371, 'ERROR_EMPTY_TRAJECTORY_FILES',
             message='The trajectory files are empty (do not contain values)')
-        spec.exit_code(371, 'ERROR_CORRUPTED_TRAJECTORY_FILES',
-            message='The trajectory files cannot be read')
-        spec.exit_code(372, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSIONS',
-            message='The trajectory files cannot be read')
         spec.exit_code(373, 'ERROR_TRAJECTORY_WITH_NAN',
-            message='The trajectory files cannot be read')
-
-        # Significant errors but calculation can be used to restart
-        # ~ spec.exit_code(400, 'ERROR_OUT_OF_WALLTIME',
-            # ~ message='The calculation stopped prematurely because it ran out of walltime.')
-        # ~ spec.exit_code(410, 'ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED',
-            # ~ message='The electronic minimization cycle did not reach self-consistency.')
-
-        # ~ spec.exit_code(461, 'ERROR_DEXX_IS_NEGATIVE',
-            # ~ message='The code failed with negative dexx in the exchange calculation.')
-        # ~ spec.exit_code(462, 'ERROR_COMPUTING_CHOLESKY',
-            # ~ message='The code failed during the cholesky factorization.')
-
-        # ~ spec.exit_code(481, 'ERROR_NPOOLS_TOO_HIGH',
-            # ~ message='The k-point parallelization "npools" is too high, some nodes have no k-points.')
-
-        # ~ spec.exit_code(500, 'ERROR_IONIC_CONVERGENCE_NOT_REACHED',
-            # ~ message='The ionic minimization cycle did not converge for the given thresholds.')
-        # ~ spec.exit_code(501, 'ERROR_IONIC_CONVERGENCE_REACHED_EXCEPT_IN_FINAL_SCF',
-            # ~ message='Then ionic minimization cycle converged but the thresholds are exceeded in the final SCF.')
-        # ~ spec.exit_code(502, 'ERROR_IONIC_CYCLE_EXCEEDED_NSTEP',
-            # ~ message='The ionic minimization cycle did not converge after the maximum number of steps.')
-        # ~ spec.exit_code(510, 'ERROR_IONIC_CYCLE_ELECTRONIC_CONVERGENCE_NOT_REACHED',
-            # ~ message='The electronic minimization cycle failed during an ionic minimization cycle.')
-        # ~ spec.exit_code(511, 'ERROR_IONIC_CONVERGENCE_REACHED_FINAL_SCF_FAILED',
-            # ~ message='The ionic minimization cycle converged, but electronic convergence was not reached in the '
-                    # ~ 'final SCF.')
-        # ~ spec.exit_code(520, 'ERROR_IONIC_CYCLE_BFGS_HISTORY_FAILURE',
-            # ~ message='The ionic minimization cycle terminated prematurely because of two consecutive failures in the '
-                    # ~ 'BFGS algorithm.')
-        # ~ spec.exit_code(521, 'ERROR_IONIC_CYCLE_BFGS_HISTORY_AND_FINAL_SCF_FAILURE',
-            # ~ message='The ionic minimization cycle terminated prematurely because of two consecutive failures in the '
-                    # ~ 'BFGS algorithm and electronic convergence failed in the final SCF.')
-
-        # ~ spec.exit_code(531, 'ERROR_CHARGE_IS_WRONG',
-            # ~ message='The electronic minimization cycle did not reach self-consistency.')
-        # ~ spec.exit_code(541, 'ERROR_SYMMETRY_NON_ORTHOGONAL_OPERATION',
-            # ~ message='The variable cell optimization broke the symmetry of the k-points.')
+            message='The trajectory files contains non-numeric entries')
+        spec.exit_code(374, 'ERROR_CORRUPTED_TRAJECTORY_FILES',
+            message='The trajectory files seem corrupted and cannot be read')
+        spec.exit_code(375, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_0',
+            message='The trajectory files contain arrays of different lengths')
+        spec.exit_code(376, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1',
+            message='The trajectory files contain arrays with a different number of entries for each timestep')
+        spec.exit_code(377, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2',
+            message='The trajectory files contain files with an unexpect number of entries for each line')
 
 
     def prepare_for_submission(self, folder):
