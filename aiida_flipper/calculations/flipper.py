@@ -8,113 +8,22 @@ from aiida import orm
 from aiida.common import exceptions
 from aiida.common.lang import classproperty
 
-from aiida_quantumespresso.calculations import BasePwCpInputGenerator, _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
-class FlipperCalculation(BasePwCpInputGenerator):
-
-    _automatic_namelists = {
-        'scf': ['CONTROL', 'SYSTEM', 'ELECTRONS'],
-        'nscf': ['CONTROL', 'SYSTEM', 'ELECTRONS'],
-        'bands': ['CONTROL', 'SYSTEM', 'ELECTRONS'],
-        'relax': ['CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS'],
-        'md': ['CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS'],
-        'vc-md': ['CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS', 'CELL'],
-        'vc-relax': ['CONTROL', 'SYSTEM', 'ELECTRONS', 'IONS', 'CELL'],
-    }
-
-    # Keywords that cannot be set by the user but will be set by the plugin
-    _blocked_keywords = [
-        ('CONTROL', 'pseudo_dir'),
-        ('CONTROL', 'outdir'),
-        ('CONTROL', 'prefix'),
-        ('SYSTEM', 'ibrav'),
-        ('SYSTEM', 'celldm'),
-        ('SYSTEM', 'nat'),
-        ('SYSTEM', 'ntyp'),
-        ('SYSTEM', 'a'),
-        ('SYSTEM', 'b'),
-        ('SYSTEM', 'c'),
-        ('SYSTEM', 'cosab'),
-        ('SYSTEM', 'cosac'),
-        ('SYSTEM', 'cosbc'),
-    ]
-
-    _use_kpoints = True
-
-    # Not using symlink in pw to allow multiple nscf to run on top of the same scf
-    _default_symlink_usage = False
+class FlipperCalculation(PwCalculation):
 
     _EVP_FILE = 'verlet.evp'
     _FOR_FILE = 'verlet.for'
     _VEL_FILE = 'verlet.vel'
     _POS_FILE = 'verlet.pos'
 
-
-    @classproperty
-    def xml_filepaths(cls):
-        """Return a list of XML output filepaths relative to the remote working directory that should be retrieved."""
-        # pylint: disable=no-self-argument,not-an-iterable
-        filepaths = []
-
-        for filename in cls.xml_filenames:
-            filepath = os.path.join(cls._OUTPUT_SUBFOLDER, '{}.save'.format(cls._PREFIX), filename)
-            filepaths.append(filepath)
-
-        return filepaths
-
     @classmethod
     def define(cls, spec):
-        # yapf: disable
-        super(FlipperCalculation, cls).define(spec)
-        spec.input('metadata.options.parser_name', valid_type=six.string_types, default='quantumespresso.flipper')
-        #spec.input('metadata.options.without_xml', valid_type=bool, required=False, help='If set to `True` the parser '
-        #    'will not fail if the XML file is missing in the retrieved folder.')
-        spec.input('kpoints', valid_type=orm.KpointsData,
-            help='kpoint mesh or kpoint path')
-        #spec.input('hubbard_file', valid_type=orm.SinglefileData, required=False,
-        #    help='SinglefileData node containing the output Hubbard parameters from a HpCalculation')
-        spec.output('output_parameters', valid_type=orm.Dict,
-            help='The `output_parameters` output node of the successful calculation.')
-        #spec.output('output_structure', valid_type=orm.StructureData, required=False,
-        #    help='The `output_structure` output node of the successful calculation if present.')
-        spec.output('output_trajectory', valid_type=orm.TrajectoryData, required=False)
-        #spec.output('output_band', valid_type=orm.BandsData, required=False,
-        #    help='The `output_band` output node of the successful calculation if present.')
-        #spec.output('output_kpoints', valid_type=orm.KpointsData, required=False)
-        #spec.output('output_atomic_occupations', valid_type=orm.Dict, required=False)
-        spec.default_output_node = 'output_parameters'
 
-        # Unrecoverable errors: required retrieved files could not be read, parsed or are otherwise incomplete
-        spec.exit_code(300, 'ERROR_NO_RETRIEVED_FOLDER',
-            message='The retrieved folder data node could not be accessed.')
-        spec.exit_code(301, 'ERROR_NO_RETRIEVED_TEMPORARY_FOLDER',
-            message='The retrieved temporary folder could not be accessed.')
-        spec.exit_code(302, 'ERROR_OUTPUT_STDOUT_MISSING',
-            message='The retrieved folder did not contain the required stdout output file.')
-        # ~ spec.exit_code(303, 'ERROR_OUTPUT_XML_MISSING',
-            # ~ message='The retrieved folder did not contain the required required XML file.')
-        # ~ spec.exit_code(304, 'ERROR_OUTPUT_XML_MULTIPLE',
-            # ~ message='The retrieved folder contained multiple XML files.')
-        # ~ spec.exit_code(305, 'ERROR_OUTPUT_FILES',
-            # ~ message='Both the stdout and XML output files could not be read or parsed.')
-        spec.exit_code(310, 'ERROR_OUTPUT_STDOUT_READ',
-            message='The stdout output file could not be read.')
-        spec.exit_code(311, 'ERROR_OUTPUT_STDOUT_PARSE',
-            message='The stdout output file could not be parsed.')
-        spec.exit_code(312, 'ERROR_OUTPUT_STDOUT_INCOMPLETE',
-            message='The stdout output file was incomplete probably because the calculation got interrupted.')
-        # ~ spec.exit_code(320, 'ERROR_OUTPUT_XML_READ',
-            # ~ message='The XML output file could not be read.')
-        # ~ spec.exit_code(321, 'ERROR_OUTPUT_XML_PARSE',
-            # ~ message='The XML output file could not be parsed.')
-        # ~ spec.exit_code(322, 'ERROR_OUTPUT_XML_FORMAT',
-            # ~ message='The XML output file has an unsupported format.')
-        spec.exit_code(340, 'ERROR_OUT_OF_WALLTIME_INTERRUPTED',
-            message='The calculation stopped prematurely because it ran out of walltime but the job was killed by the '
-                    'scheduler before the files were safely written to disk for a potential restart.')
-        spec.exit_code(350, 'ERROR_UNEXPECTED_PARSER_EXCEPTION',
-            message='The parser raised an unexpected exception.')
+        super(FlipperCalculation, cls).define(spec)
+
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
             message='The parser could not get the timestep in the calculation.')
         spec.exit_code(370, 'ERROR_MISSING_TRAJECTORY_FILES',
@@ -131,7 +40,6 @@ class FlipperCalculation(BasePwCpInputGenerator):
             message='The trajectory files contain arrays with a different number of entries for each timestep')
         spec.exit_code(377, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2',
             message='The trajectory files contain files with an unexpect number of entries for each line')
-
 
     def prepare_for_submission(self, folder):
         """
@@ -155,7 +63,6 @@ class FlipperCalculation(BasePwCpInputGenerator):
         from aiida.common.utils import get_unique_filename
         import re
         local_copy_list_to_append = []
-
         # I put the first-level keys as uppercase (i.e., namelist and card names)
         # and the second-level keys as lowercase
         # (deeper levels are unchanged)

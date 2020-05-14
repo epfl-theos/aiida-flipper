@@ -33,19 +33,6 @@ from aiida_quantumespresso.parsers.pw import PwParser
 from aiida_flipper.calculations.flipper import FlipperCalculation
 from qe_tools.constants import bohr_to_ang, timeau_to_sec
 
-
-WALLTIME_REGEX = re.compile(
-    """
-    PWSCF [ \t]* [:] [ \t]* (?P<cputime>([ 0-9]+[dhm])+) [ \t]+CPU
-    [ \t]+(?P<walltime>([ 0-9]+[dhm])+) [ \t]+ WALL
-    """, re.X
-)
-
-TIME_USED_REGEX = re.compile(
-    'PWSCF[ \t]*\:[ \t]+(?P<cputime>[A-Za-z0-9\. ]+)[ ]+CPU[ ]+(?P<walltime>[A-Za-z0-9\. ]+)[ ]+WALL'
-)
-
-
 POS_REGEX_3 = re.compile(
     """
 ^                                                                             # Linestart
@@ -147,18 +134,9 @@ class FlipperParser(PwParser):
                 return self.exit_codes.ERROR_MISSING_TRAJECTORY_FILES
 
         ########################## OUTPUT FILE ##################################
-        stdout_txt = self.retrieved.get_object_content(filename_stdout)
 
-        match = TIME_USED_REGEX.search(stdout_txt)
-        try:
-            cputime = convert_qe_time_to_sec(match.group('cputime'))
-        except:
-            cputime = -1.
-        try:
-            walltime = convert_qe_time_to_sec(match.group('walltime'))
-        except:
-            walltime = -1.
         if input_dict['CONTROL'].get('tstress', False):
+            stdout_txt = self.retrieved.get_object_content(filename_stdout)
             stresses = list()
             iprint = input_dict['CONTROL'].get('iprint', 1)
             # I implement reading every iprint value only, to be consistent with
@@ -172,14 +150,17 @@ class FlipperParser(PwParser):
                     stress[i, :] = stress_vals[i].split()[:3]
                 stresses.append(stress)
             stresses = np.array(stresses)
+            del stdout_txt
         else:
             stresses = None
-        del stdout_txt
         #
-        # parsed_stdout, logs_stdout = self.parse_stdout(input_dict, parser_options=None, parsed_xml=None)
+        parsed_stdout, logs_stdout = self.parse_stdout(input_dict, parser_options=None, parsed_xml=None)
+        parsed_stdout.pop('trajectory', None)
+        parsed_stdout.pop('structure', None)
+        self.emit_logs(logs_stdout)
 
         self.out('output_parameters', orm.Dict(
-            dict=dict(cputime=cputime, walltime=walltime,)))
+            dict=parsed_stdout))
         
         ########################## EVP FILE #################################
         with open(evp_file) as f:
