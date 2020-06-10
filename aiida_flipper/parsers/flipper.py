@@ -94,7 +94,7 @@ class FlipperParser(PwParser):
 
 
         raise_if_nan_in_values =  not(calc_input_dict['CONTROL'].get('lhustle', False))
-        # If ******* occurs (i.e. value not printed, I will raise immidiately if this
+        # If ******* occurs (i.e. value not printed), I will raise immediately if this
         # flag is set to True. Before, this was checked at the very end, which waists computer time.
 
         try:
@@ -207,7 +207,7 @@ class FlipperParser(PwParser):
                 if len(evp_data) == 0:
                     return self.exit_codes.ERROR_EMPTY_TRAJECTORY_FILES
 
-                # I go through the data line by line, which is much slower, butthe only way to do things properly.
+                # I go through the data line by line, which is much slower, but the only way to do things properly.
                 # Since the only way I can get here (I think) is if the last column of EVP file is not readable,
                 # this might be replaced with a simple check if raise_if_nan_in_values before
                 # going through it. For now better safe than sorry
@@ -335,6 +335,7 @@ class FlipperParser(PwParser):
         # TIMES # is this necessary, these are easy to recreate?
         trajectory_data.set_array('times', scalar_quantities[:, 1])
         trajectory_data.set_attribute('units|times', 'ps')
+        trajectory_data.set_attribute('sim_time_fs', scalar_quantities[-1, 1] - scalar_quantities[0, 1])
 
         # ENERGIES
         trajectory_data.set_array('kinetic_energies', scalar_quantities[:, 2])

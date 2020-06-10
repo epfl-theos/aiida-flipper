@@ -24,21 +24,24 @@ class FlipperCalculation(PwCalculation):
 
         super(FlipperCalculation, cls).define(spec)
 
+        # Unrecoverable errors
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
             message='The parser could not get the timestep in the calculation.')
         spec.exit_code(370, 'ERROR_MISSING_TRAJECTORY_FILES',
             message='At least one of trajectory files is missing')
-        spec.exit_code(371, 'ERROR_EMPTY_TRAJECTORY_FILES',
+
+        # MD errors, it is worth trying restarting another time
+        spec.exit_code(601, 'ERROR_EMPTY_TRAJECTORY_FILES',
             message='The trajectory files are empty (do not contain values)')
-        spec.exit_code(373, 'ERROR_TRAJECTORY_WITH_NAN',
+        spec.exit_code(602, 'ERROR_TRAJECTORY_WITH_NAN',
             message='The trajectory files contains non-numeric entries')
-        spec.exit_code(374, 'ERROR_CORRUPTED_TRAJECTORY_FILES',
+        spec.exit_code(603, 'ERROR_CORRUPTED_TRAJECTORY_FILES',
             message='The trajectory files seem corrupted and cannot be read')
-        spec.exit_code(375, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_0',
+        spec.exit_code(604, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_0',
             message='The trajectory files contain arrays of different lengths')
-        spec.exit_code(376, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1',
+        spec.exit_code(605, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1',
             message='The trajectory files contain arrays with a different number of entries for each timestep')
-        spec.exit_code(377, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2',
+        spec.exit_code(606, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2',
             message='The trajectory files contain files with an unexpect number of entries for each line')
 
     def prepare_for_submission(self, folder):

@@ -1,5 +1,5 @@
 {
-    "version": "2.0.0a1",
+    "version": "2.0.0a2",
     "name": "aiida_flipper",
     "url": "",
     "license": "MIT License",
@@ -27,6 +27,9 @@
         "aiida.parsers": [
             "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",
             "quantumespresso.pes = aiida_flipper.parsers.pes:PesParser"
+        ],
+        "aiida.workflows": [
+            "quantumespresso.flipper.replaymd = aiida_flipper.workflows.replaymd:ReplayMdWorkChain"
         ]
     },
     "extras_require": {

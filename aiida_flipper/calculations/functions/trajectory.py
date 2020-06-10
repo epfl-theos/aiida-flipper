@@ -20,6 +20,7 @@ def get_structure_from_trajectory(trajectory, parameters, structure=None, settin
         * complete_missing: If the trajectory does not store all the information required to create the structure,
             i.e. certain atoms were excluded. This will use the structure to complete these atoms.
             An example is the optimized pinball parser, which only stores the positions/velocities of the pinballs.
+            Another example: if the cell trajectory is not found, the structure's cell will be used.
         * missing_velocities: The velocities to give, if complete_missing and create_settings are both set to True. By default [0,0,0]
         * recenter: When true, set the center of mass momentum to 0 (when restarting from a trajectory that doesn't preserve the center of mass.
     :param structure: If comlete_missing is True, I need a structure
@@ -33,8 +34,22 @@ def get_structure_from_trajectory(trajectory, parameters, structure=None, settin
     complete_missing = parameters.get_attribute('complete_missing', False)
     missing_velocities = parameters.get_attribute('missing_velocities', [0, 0, 0])
 
+    if complete_missing and structure is None:
+            raise InputValidationError('You need to pass a structure when completing missing atoms.')
+    if create_settings and settings is None:
+            raise InputValidationError('You need to pass settings when creating settings.')
+
     pos_units = trajectory.get_attribute('units|positions', 'angstrom')
     atoms = trajectory.get_step_structure(step_index).get_ase()
+
+    if ('cells' not in trajectory.get_arraynames()) and complete_missing:
+        cell_units = trajectory.get_attribute('units|cells', 'angstrom')
+        if cell_units == 'angstrom':
+            atoms.set_cell(structure.cell)
+        elif cell_units == 'atomic':
+            atoms.set_cell(np.array(structure.cell) * bohr_to_ang)
+        else:
+            raise Exception("Can't deal with units of cells {}.".format(cell_units))
 
     if pos_units == 'angstrom':
         pass
@@ -69,8 +84,6 @@ def get_structure_from_trajectory(trajectory, parameters, structure=None, settin
             raise Exception("Can't deal with units of velocities {}".format(vel_units))
 
     if complete_missing:
-        if structure is None:
-            raise InputValidationError('You need to pass a structure when completing missing atoms.')
         for atom in structure.get_ase()[len(atoms):]:
             atoms.append(atom)
             if create_settings:
