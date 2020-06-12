@@ -6,29 +6,10 @@ from __future__ import print_function
 from six.moves import map
 from six.moves import range
 
-import os, numpy as np, re
+import os, re
+import numpy as np
 
 from aiida import orm
-
-# ~ from aiida_quantumespresso.parsers.basic_raw_parser_pw import convert_qe_time_to_sec
-
-# ~ from aiida.orm.data.parameter import ParameterData
-# ~ from aiida.orm.data.folder import FolderData
-# ~ from aiida.parsers.parser import Parser
-
-# ~ from aiida.common.datastructures import calc_states
-# ~ from aiida.common.exceptions import UniquenessError
-# ~ from aiida.orm.data.array import ArrayData
-# ~ from aiida.orm.data.array.kpoints import KpointsData
-
-# ~ from aiida.orm.data.array.trajectory import TrajectoryData
-# ~ from aiida.orm.data.array import ArrayData
-# ~ from aiida.common.utils import xyz_parser_iterator
-
-# ~ from aiida.parsers.exceptions import OutputParsingError
-# ~ from aiida.parsers.parser import Parser
-
-#~ from aiida.parsers.plugins.quantumespresso.pw_warnings import get_warnings
 from aiida_quantumespresso.parsers.pw import PwParser
 from aiida_flipper.calculations.flipper import FlipperCalculation
 from qe_tools.constants import bohr_to_ang, timeau_to_sec
@@ -81,6 +62,7 @@ class FlipperParser(PwParser):
 
     def parse(self, **kwargs):
 
+        self.exit_code_stdout = None
 
         # Check that the retrieved folder is there
         try:
@@ -88,31 +70,26 @@ class FlipperParser(PwParser):
         except exceptions.NotExistent:
             return self.exit(self.exit(self.exit_codes.ERROR_NO_RETRIEVED_FOLDER))
 
-
         calc_input_dict = self.node.inputs.parameters.get_dict()
         input_dict = self.node.inputs.parameters.get_dict()
 
-
-        raise_if_nan_in_values =  not(calc_input_dict['CONTROL'].get('lhustle', False))
+        raise_if_nan_in_values = not (calc_input_dict['CONTROL'].get('lhustle', False))
         # If ******* occurs (i.e. value not printed), I will raise immediately if this
         # flag is set to True. Before, this was checked at the very end, which waists computer time.
 
         try:
             # This referes to the SAMPLING timestep for the trajectory:
-            timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get(
-                'iprint', 1)
+            timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
         except KeyError:
             return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
 
         in_struc = self.node.inputs.structure
 
-
         list_of_files = self.retrieved.list_object_names()
         # the stdout should exist
         filename_stdout = self.node.get_attribute('output_filename')
         if filename_stdout not in list_of_files:
-             return self.exit_codes.ERROR_OUTPUT_STDOUT_MISSING
-
+            return self.exit_codes.ERROR_OUTPUT_STDOUT_MISSING
 
         for f in ('data-file.xml', '_scheduler-stdout.txt', '_scheduler-stderr.txt'):
             if f in list_of_files:
@@ -134,7 +111,6 @@ class FlipperParser(PwParser):
                 return self.exit_codes.ERROR_MISSING_TRAJECTORY_FILES
 
         ########################## OUTPUT FILE ##################################
-
         if input_dict['CONTROL'].get('tstress', False):
             stdout_txt = self.retrieved.get_object_content(filename_stdout)
             stresses = list()
@@ -153,15 +129,16 @@ class FlipperParser(PwParser):
             del stdout_txt
         else:
             stresses = None
-        #
+
         parsed_stdout, logs_stdout = self.parse_stdout(input_dict, parser_options=None, parsed_xml=None)
         parsed_stdout.pop('trajectory', None)
         parsed_stdout.pop('structure', None)
-        self.emit_logs(logs_stdout)
 
-        self.out('output_parameters', orm.Dict(
-            dict=parsed_stdout))
-        
+        self.out('output_parameters', orm.Dict(dict=parsed_stdout))
+
+        ignore = ['Error while parsing ethr.', 'DEPRECATED: symmetry with ibrav=0, use correct ibrav instead']
+        self.emit_logs(logs_stdout, ignore=ignore)
+
         ########################## EVP FILE #################################
         with open(evp_file) as f:
             try:
@@ -177,10 +154,11 @@ class FlipperParser(PwParser):
                 f.seek(0)
                 # reading the last column of the verlet.evp
                 try:
-                    convergence = np.genfromtxt(f, dtype='S1', usecols=(8), converters={
-                        8: (lambda s: F90_BOOL_DICT[s])}) # Raise KeyError if neither F nor T
-                        # in 8th column
-                        # raise IndexError if column does not exist
+                    convergence = np.genfromtxt(
+                        f, dtype='S1', usecols=(8), converters={8: (lambda s: F90_BOOL_DICT[s])}
+                    )  # Raise KeyError if neither F nor T
+                    # in 8th column
+                    # raise IndexError if column does not exist
                 except IndexError:
                     return self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSIONS_2
                 # TODO is there a function that can do this in one go?
@@ -190,13 +168,13 @@ class FlipperParser(PwParser):
                 # would have been dealt by np.genfromtext
 
                 # I first check number of lines in text file:
-                f.seek(0) # back to line 0
+                f.seek(0)  # back to line 0
                 # Getting the length of the file
                 evp_data = []
                 for idx, line in enumerate(f.readlines()):
                     data_this_line = line.split()[1:]
                     if len(data_this_line) == 0:
-                        pass # skipping empty lines
+                        pass  # skipping empty lines
                     elif len(data_this_line) == 8:
                         evp_data.append(data_this_line)
                     else:
@@ -233,7 +211,6 @@ class FlipperParser(PwParser):
         if len(scalar_quantities) == 0 or len(convergence) == 0:
             return self.exit_codes.ERROR_CORRUPTED_TRAJECTORY_FILES
 
-
         #################################### FORCES ###########################################
         if input_dict['CONTROL'].get('ldecompose_ewald', False):
             pos_regex_forces = POS_REGEX_15
@@ -250,22 +227,29 @@ class FlipperParser(PwParser):
             # A file could not be read using the fast regular expressions, because it contains
             # non-numerical values or because there too many or too few values
             # in line.
-            forces, exit_code = get_coords_from_file_slow_and_steady(for_file, ncol, raise_if_nan_in_values,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
-                    self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,)
+            forces, exit_code = get_coords_from_file_slow_and_steady(
+                for_file,
+                ncol,
+                raise_if_nan_in_values,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
+                self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,
+            )
             if exit_code:
                 return exit_code
-
 
         #################################### POSITIONS ###########################################
         try:
             positions = get_coords_from_file(pos_file, POS_BLOCK_REGEX, POS_REGEX_3)
         except ValueError:
-            positions, exit_code = get_coords_from_file_slow_and_steady(pos_file, 3, raise_if_nan_in_values,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
-                    self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,)
+            positions, exit_code = get_coords_from_file_slow_and_steady(
+                pos_file,
+                3,
+                raise_if_nan_in_values,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
+                self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,
+            )
             if exit_code:
                 return exit_code
 
@@ -273,10 +257,14 @@ class FlipperParser(PwParser):
         try:
             velocities = get_coords_from_file(vel_file, POS_BLOCK_REGEX, POS_REGEX_3)
         except ValueError:
-            velocities = get_coords_from_file_slow_and_steady(vel_file, 3, raise_if_nan_in_values,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
-                    self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
-                    self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,)
+            velocities = get_coords_from_file_slow_and_steady(
+                vel_file,
+                3,
+                raise_if_nan_in_values,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1,
+                self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2,
+                self.exit_codes.ERROR_TRAJECTORY_WITH_NAN,
+            )
             if exit_code:
                 return exit_code
 
@@ -309,15 +297,15 @@ class FlipperParser(PwParser):
         # Maybe in the future, we should have Angstrom/fs ?
         positions *= bohr_to_ang
 
-
+        # Produce trajectory
         trajectory_data = orm.TrajectoryData()
-
         trajectory_data.set_trajectory(
             stepids=np.array(scalar_quantities[:, 0], dtype=int),
-            # cells=cells,
+            # cells=cells,  # flipper always runs NVT
             symbols=symbols,
             positions=positions,
-            velocities=velocities)
+            velocities=velocities
+        )
 
         trajectory_data.set_attribute('atoms', symbols)
         trajectory_data.set_attribute('timestep_in_fs', timestep_in_fs)
@@ -367,6 +355,36 @@ class FlipperParser(PwParser):
 
         self.out('output_trajectory', trajectory_data)
 
+        ######## At last, check output for problems to be reported (e.g. timeout, ...)
+
+        # First check for specific known problems that can cause a pre-mature termination of the calculation
+        exit_code = self.validate_premature_exit(logs_stdout)
+        if exit_code:
+            return self.exit(exit_code)
+
+        ## If the both stdout and xml exit codes are set, there was a basic problem with both output files and there
+        ## is no need to investigate any further.
+        #if self.exit_code_stdout and self.exit_code_xml:
+        #    return self.exit(self.exit_codes.ERROR_OUTPUT_FILES)
+
+        if self.exit_code_stdout:
+            return self.exit(self.exit_code_stdout)
+
+        #if self.exit_code_xml:
+        #    return self.exit(self.exit_code_xml)
+
+        ## TODO: ADD A VALIDATOR IF THE OUTPUT PRODUCES 'md'-SPECIFIC MESSAGES
+        ## First determine issues that can occurr for all calculation types. Note that the generic errors, that are
+        ## common to all types are done first. If a problem is found there, we return the exit code and don't continue
+        #for validator in [self.validate_electronic, self.validate_dynamics, self.validate_ionic]:
+        #    exit_code = validator(trajectory, parsed_parameters, logs_stdout)
+        #    if exit_code:
+        #        return self.exit(exit_code)
+
+        # TODO: not sure this can actually happen
+        if 'ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED' in logs_stdout.error:
+            return self.exit_codes.ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED
+
 
 def get_coords_from_file(filename, pos_block_regex, pos_regex):
     with open(filename) as f:
@@ -377,14 +395,16 @@ def get_coords_from_file(filename, pos_block_regex, pos_regex):
                           dtype=np.float64)
     return coords
 
-def get_coords_from_file_slow_and_steady(filename, ncol, raise_if_nan,
-        exit_code_dimension_1, exit_code_dimension_2, exit_code_nan):
+
+def get_coords_from_file_slow_and_steady(
+    filename, ncol, raise_if_nan, exit_code_dimension_1, exit_code_dimension_2, exit_code_nan
+):
     trajectory = []
     timestep = None
     with open(filename) as f:
         for iline, line in enumerate(f.readlines()):
-            line = line.strip() # If there is space in front of '>'
-            if not line: # skip empty lines:
+            line = line.strip()  # If there is space in front of '>'
+            if not line:  # skip empty lines:
                 continue
             if line.startswith('>'):
                 if timestep is None:
