@@ -79,18 +79,22 @@ class ReplayMdWorkChain(PwBaseWorkChain):
     Velocities are read from the `ATOMIC_VELOCITIES` key of the settings node.
     If not found they will be initialized.
     """
-    ## NOTE ##
+    ## NOTES ##
     # with 'replay' we indicate a molecular dynamics restart, in which positions & velocities are read from the
     # last step of the previous trajectory. In this work chain we always perform a 'dirty restart', i.e. the charge
-    # densities restart from scratch (we do not use the `restart_mode='restart'` in QE). In reality, in the Pinball code the
-    # host-lattice charge density is always read from file, therefore we always set a `parent_folder`, so that the
-    # plugin will copy it when restarting.
+    # densities are always initialized from scratch (we do not use the `restart_mode='restart'` of QE).
+    # In reality, in the Pinball code the host-lattice charge density is always read from file. Therefore we always
+    # set a `parent_folder`, such that the plugin will copy it to the new location when restarting.
+    #
+    # The parser of a FlipperCalculation will return an output trajectory node if it manages to parse it.
+    # As long as long as an output trajectory was produced, erros raised from the parsing of the aiida.out log file
+    # (e.g. out of walltime, incomplete output, ...) will be ignored and we shall try to (dirty) restart.
 
-    # Question:
+    ## QUESTION ##
     # probably we could define the `_process_class` at the instance level, thus allowing one to choose
     # to use either a `PwCalculation`, `FlipperCalculation`, or `HustlerCalculation` without redefining this class.
     # The drawback is probably that (I guess) the inputs will not be exposed (in the builder?)?
-    # Alternatively, one could define subclasses were `_process_class` is set accordingly.
+    # Alternatively, one could just define subclasses were `_process_class` is set accordingly.
     _process_class = FlipperCalculation  # probably we can define this in a subclass
 
     defaults = AttributeDict({
@@ -108,6 +112,7 @@ class ReplayMdWorkChain(PwBaseWorkChain):
     def define(cls, spec):
         """Define the process specification."""
         # yapf: disable
+        # NOTE: input, outputs, and exit_codes are inherited from PwBaseWorkChain
         super().define(spec)
         #spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
 
@@ -141,8 +146,9 @@ class ReplayMdWorkChain(PwBaseWorkChain):
             #),
             while_(cls.should_run_process)(
                 cls.prepare_process,
-                cls.run_process,      # run calculation
-                cls.inspect_process,  # evaluate calc
+                cls.run_process,
+                cls.inspect_process,
+                cls.check_energy_fluctuations,
                 cls.update_mdsteps,
             ),
             cls.results,
@@ -156,11 +162,14 @@ class ReplayMdWorkChain(PwBaseWorkChain):
 
         spec.inputs['handler_overrides'].default = lambda: orm.Dict(dict={
             'sanity_check_insufficient_bands': False,
+            'handle_out_of_walltime': False,
             'handle_vcrelax_converged_except_final_scf': False,
             'handle_relax_recoverable_ionic_convergence_error': False,
             'handle_relax_recoverable_electronic_convergence_error': False,
             #'handle_electronic_convergence_not_achieved': False,
             })
+
+        # TODO: we should pop the spec.exit_codes that do not apply
         spec.exit_code(205, 'ERROR_INVALID_INPUT_MD_PARAMETERS',
             message='Input parameters for molecular dynamics are not correct.')
         spec.exit_code(206, 'ERROR_INVALID_INPUT_VELOCITIES',
@@ -177,7 +186,6 @@ class ReplayMdWorkChain(PwBaseWorkChain):
         super().setup()
         #self.ctx.restart_calc = None
         #self.ctx.inputs = AttributeDict(self.exposed_inputs(PwCalculation, 'pw'))
-        print(self.ctx.inputs)
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
@@ -298,6 +306,8 @@ class ReplayMdWorkChain(PwBaseWorkChain):
         # NOTE pinball: the parent folder (charge density) does not change, we do not need to specify the restart mode
         if self.ctx.restart_calc:
             # if it is a replay, extract structure and velocities from trajectory of restart_calc
+            # NOTE (TODO): if we are retrying a calculation identical to the prev one (e.g. after an unhandled failure),
+            #              there is no need to extract the structure & velocities again
             try:
                 prev_trajectory = self.ctx.restart_calc.outputs.output_trajectory
             except (KeyError, exceptions.NotExistent):
@@ -360,32 +370,58 @@ class ReplayMdWorkChain(PwBaseWorkChain):
 #        """Analyse the results of the previous process and call the handlers when necessary. [...]"""
 #        super().inspect_process()
 
+    def check_energy_fluctuations(self):
+        """Check the fluctuations of the total energy of the total trajectory so far.
+        If they are higher of the threshold, abort.
+        """
+        total_energy_max_fluctuation = self.inputs.get('total_energy_max_fluctuation', None)
+        if total_energy_max_fluctuation:
+            calculation = self.ctx.children[self.ctx.iteration - 1]
+            try:
+                traj = calculation.outputs.output_trajectory
+            except exceptions.NotExistent:
+                self.report('{}><{}> [check_energy_fluctuations]: Trajectory not found. Skipping test.'.format(
+                            calculation.process_label, calculation.pk))
+            else:
+                traj = get_total_trajectory(self, store=False)
+                total_energies = traj.get_array('total_energies')
+                diff = total_energies.max() - total_energies.min()
+                if (diff > total_energy_max_fluctuation):
+                    self.report(
+                        '{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} EXCEEDED THRESHOLD {} !!'
+                        '  Aborting...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
+                    return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
+                else:
+                    self.report('{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} < threshold ({}) OK'.format(
+                                    calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
+
     def update_mdsteps(self):
         """Get the number of steps of the last trajectory and update the counters. If there are more MD steps to do,
         set `restart_calc` and set the state to not finished.
         """
-        # TODO: SHOULD THIS METHOD BE MOVED TO A @process_handler ?
-        # the extra 'discard_trajectory' indicates if we wish to discard the trajectory, for whatever reason (not sure it ever happens)
-
-        # if the calculation was successfull, there will be a trajectory
+        # The extra 'discard_trajectory' indicates if we wish to discard the trajectory, for whatever reason (not sure it ever happens).
+        # If the calculation was successfull, there will be a trajectory
+        # In this case we we shall restart from this calculation, otherwise restart_calc is not modified, such that we
+        # will restart from the previous one.
         node = self.ctx.children[self.ctx.iteration - 1]
         try:
             traj = node.outputs.output_trajectory
         except (KeyError, exceptions.NotExistent):
             self.report('No output_trajectory was generated by {}<{}>.'.format(node.label, node.pk))
+            # restart_calc is not updated, so we will restart from the last calculation (i.e. we retry the same thing)
         else:
             nsteps_run_last_calc = get_completed_number_of_steps(node)
             if not traj.get_extra('discard_trajectory', False):
                 self.ctx.mdsteps_todo -= nsteps_run_last_calc
                 self.ctx.mdsteps_done += nsteps_run_last_calc
                 self.report('{}<{}> ran {} steps ({} done - {} to go).'.format(node.process_label, node.pk, nsteps_run_last_calc, self.ctx.mdsteps_done, self.ctx.mdsteps_todo))
+
+                # if there are more MD steps to do, set the restart_calc to the last calculation
+                if self.ctx.mdsteps_todo > 0:
+                    self.ctx.restart_calc = node
+                    self.ctx.is_finished = False
             else:
                 self.report('{}<{}> ran {} steps. This trajectory will be DISCARDED!'.format(node.process_label, node.pk, nsteps_run_last_calc))
-
-            # if there are more MD steps to do, set the restart_calc to the last calculation
-            if self.ctx.mdsteps_todo > 0:
-                self.ctx.restart_calc = node
-                self.ctx.is_finished = False
 
 #    def report_error_handled(self, calculation, action):
 #        """Report an action taken for a calculation that has failed.
@@ -453,9 +489,25 @@ class ReplayMdWorkChain(PwBaseWorkChain):
     ### PROCESS HANDLERS ###
     # error codes > 600 are related to MD trajectories
     # Often these errors happen when the calculation is killed in the middle of writing.
-    # We can define a specific handler to restart the calculation, but the same will happen
-    # if no handler is called: in this case the calculation will be relaunched once, and if it fails
-    # again, it the work chain will fail
+    # If an output trajectory is found, we shall always restart, no matter the error.
+    # Even with error codes < 400 a trajectory may have been produced.
+    # Otherwise, execute the other error handlers.
+    # If no error handler is triggered (or none has returned a ProcessHandlerReport), the error is considered as
+    # 'unhandled': in this case the calculation will be relaunched once. If it fails again, the work chain will fail.
+
+    @process_handler(priority=700)
+    def handle_salvage_output_trajectory(self, calculation):
+        """Check if an output trajectory was generated, no matter if the calculation failed, and restart."""
+        try:
+            traj = calculation.outputs.output_trajectory
+        except exceptions.NotExistent:
+            # no output_trajectory, go through the other error handlers
+            return
+        else:
+            # restart from trajectory
+            self.ctx.restart_calc = calculation
+            self.report_error_handled(calculation, 'Restarting calculation...')
+            return ProcessHandlerReport(True)
 
 #    @process_handler(priority=600)
 #    def handle_unrecoverable_failure(self, calculation):
@@ -463,26 +515,6 @@ class ReplayMdWorkChain(PwBaseWorkChain):
 #        if calculation.is_failed and calculation.exit_status < 400:
 #            self.report_error_handled(calculation, 'unrecoverable error, aborting...')
 #            return ProcessHandlerReport(True, self.exit_codes.ERROR_UNRECOVERABLE_FAILURE)
-
-    @process_handler(priority=599)
-    def check_energy_fluctuations(self, calculation):
-        total_energy_max_fluctuation = self.inputs.get('total_energy_max_fluctuation', None)
-        if total_energy_max_fluctuation:
-            # checking the fluctuations of the total energy:
-            try:
-                traj = calculation.outputs.output_trajectory
-            except exceptions.NotExistent:
-                self.report_error_handled('trajectory not found: skipping energy fluctuations check')
-                return
-            traj = calculation.outputs.output_trajectory
-            total_energies = traj.get_array('total_energies')
-            diff = total_energies.max() - total_energies.min()
-            print('  Energy fluctuations:', diff, total_energy_max_fluctuation)
-            if (diff > total_energy_max_fluctuation):
-                self.report_error_handled('{}<{}> : fluctuations of the total energy ({}) exceeded the threshold ({}). Aborting...'.format(
-                    calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
-                ProcessHandlerReport(True, self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS)
-        return
 
 #    @process_handler(priority=590, exit_codes=[
 #        PwCalculation.exit_codes.ERROR_COMPUTING_CHOLESKY,
@@ -495,39 +527,10 @@ class ReplayMdWorkChain(PwBaseWorkChain):
 #        self.report_error_handled(calculation, 'known unrecoverable failure detected, aborting...')
 #        return ProcessHandlerReport(True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE)
 
-    @process_handler(priority=580, exit_codes=[
-        FlipperCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,
-        ])
-    def handle_out_of_walltime(self, calculation):
-        """Handle `ERROR_OUT_OF_WALLTIME` exit code: calculation shut down neatly and we can simply restart."""
-        try:
-            output_trajectory = calculation.outputs.output_trajectory
-        except exceptions.NotExistent:
-            #self.ctx.restart_calc = calculation
-            self.report_error_handled(calculation, 'out of walltime: no trajectory (should not happen): redo the last calculation')
-        else:
-            self.ctx.restart_calc = calculation
-            self.report_error_handled(calculation, 'out of walltime: get structure & velocities from trajectory, and restart')
+    ### EXIT CODES >= 400 THAT HAVE NOT BEEN HANDLED YET
+#    @process_handler(priority=410, exit_codes=[
+#        FlipperCalculation.exit_codes.ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED,])
+#    def handle_electronic_convergence_not_achieved(self, calculation):
+#        """Handle `ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED`: decrease the mixing beta and restart from scratch."""
 
-        return ProcessHandlerReport(True)
-
-## TODO: check that this error is detected by the flipper parser
-    @process_handler(priority=410, exit_codes=[
-        FlipperCalculation.exit_codes.ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED,])
-    def handle_electronic_convergence_not_achieved(self, calculation):
-        """Handle `ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED`: restart from last trajectory step."""
-#        factor = self.defaults.delta_factor_mixing_beta
-#        mixing_beta = self.ctx.inputs.parameters.get('ELECTRONS', {}).get('mixing_beta', self.defaults.qe.mixing_beta)
-#        mixing_beta_new = mixing_beta * factor
-
-        output_trajectory = calculation.outputs.output_trajectory
-        self.ctx.restart_calc = calculation
-        self.report_error_handled(calculation, 'electronic convergence not reached: get structure & velocities from trajectory, and restart')
-#        self.ctx.inputs.parameters.setdefault('ELECTRONS', {})['mixing_beta'] = mixing_beta_new
-
-#        action = 'reduced beta mixing from {} to {} and restarting from the last calculation'.format(
-#            mixing_beta, mixing_beta_new)
-        self.report_error_handled(calculation, action)
-        return ProcessHandlerReport(True)
-
-#    ## add possible flipper-specific error handlers
+    ## add possible flipper-specific error handlers

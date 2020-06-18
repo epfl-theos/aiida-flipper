@@ -127,6 +127,6 @@ def concatenate_trajectory(**kwargs):
                 ])
             )
     [traj.set_attribute(k, v) for k, v in sorted_trajectories[0].attributes_items() if not k.startswith('array|')]
-    traj.set_attribute('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attribute('timestep_in_fs'))
+    traj.set_attribute('sim_time_fs', (traj.get_array('steps').size - 1) * sorted_trajectories[0].get_attribute('timestep_in_fs'))
     return {'concatenated_trajectory': traj}
 
