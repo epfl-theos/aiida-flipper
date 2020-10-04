@@ -75,7 +75,7 @@ def get_suggested_cutoff(pseudo_family_name, pseudos, min_ecutwfc=0):
         for p in pseudos:
             suggestion_for_this_group = p.get_extra(pseudo_family_name)
             ecutwfc = max([ecutwfc, suggestion_for_this_group['cutoff']])
-            ecutrho = max([ecutrho, ecutwfc*suggestion_for_this_group['duality']])
+            ecutrho = max([ecutrho, suggestion_for_this_group['rho_cutoff']])
 
     except AttributeError as e:
         raise AttributeError(

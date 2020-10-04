@@ -12,7 +12,7 @@
         "Development Status :: 4 - Beta"
     ],
     "install_requires": [
-        "aiida-core>=0.10.1",
+        "aiida-core==0.10.1",
         "samos>=0.3.1"
     ],
     "entry_points": {
@@ -21,7 +21,8 @@
             "quantumespresso.pes = aiida_flipper.calculations.pes:PesCalculation",
             "quantumespresso.hustler = aiida_flipper.calculations.hustler:HustlerCalculation",
             "chillstep.branching=aiida_flipper.calculations.branching.BranchingCalculation",
-            "chillstep.moldyn=aiida_flipper.calculations.moldyn.MoldynCalculation"
+            "chillstep.lindiffusion=aiida_flipper.calculations.lindiffusion.LindiffusionCalculation",
+            "chillstep.convergediffusion=aiida_flipper.calculations.lindiffusion.ConvergeDiffusionCalculation"
          ],
         "aiida.parsers": [
             "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",

@@ -2,7 +2,7 @@ import copy, os
 
 from aiida.backends.utils import get_authinfo
 from aiida.common.datastructures import calc_states
-from aiida.orm import Data, load_node, Calculation, DataFactory
+from aiida.orm import Data, load_node, Calculation, DataFactory, Computer
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import make_inline
 from aiida.orm.data.parameter import ParameterData
@@ -42,8 +42,6 @@ def copy_directory(remote_folder, parameters):
                             aiidauser=remote_folder.get_user()).get_transport()
     source_dir = os.path.join(remote_folder.get_remote_path(), calc._OUTPUT_SUBFOLDER)
 
-
-
     with t_dest, t_source:
         # build the destination folder
         t_dest.chdir(dest_dir)
@@ -57,6 +55,7 @@ def copy_directory(remote_folder, parameters):
         t_dest.mkdir(calcuuid[4:])
         t_dest.chdir(calcuuid[4:])
         final_dest_dir = t_dest.getcwd()
+        print 'Copying directory "{}" to "{}"'.format(source_dir, final_dest_dir)
         # copying files!
         t_source.copy(source_dir, final_dest_dir)
     return {'copied_remote_folder': RemoteData(computer=computer_dest,

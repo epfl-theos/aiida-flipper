@@ -35,7 +35,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         # assert isinstance(parameters_branching_d['nr_of_branches'], int)
         inp_d.pop('moldyn_parameters_main')
         parameters_main = inp_d.pop('parameters_main').get_dict()
-        assert parameters_main['IONS']['ion_velocities'] == 'from_input'
+        #assert parameters_main['IONS']['ion_velocities'] == 'from_input'
 
         try:
             inp_d.pop('moldyn_parameters_thermalize')
@@ -323,7 +323,6 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         for kind in structure.kinds:
             inp_d.pop('pseudo_{}'.format(kind.name))
             inp_d.pop('pseudo_{}_flipper'.format(kind.name), None)
-        
 
         # The code label has to be set as an attribute, and can be changed during the dynamics
         Code.get_from_string(self.ctx.code_string)
@@ -343,7 +342,6 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             inp_d.pop(optional_kw, None)
 
 
-
         diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
         try:
             maxiter = diffusion_convergence_parameters_d['max_iterations']
@@ -357,8 +355,8 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             miniter = diffusion_convergence_parameters_d['min_iterations']
             if not isinstance(miniter, int):
                 raise TypeError("min_iterations needs to be an integer")
-            if miniter < 3:
-                raise ValueError("min_iterations needs to be larger than 2")
+            if miniter < 2:
+                raise ValueError("min_iterations needs to be >= 2")
             if miniter > maxiter:
                 raise ValueError("max_iterations has to be larger or equal to min_iterations")
         except KeyError:
@@ -414,10 +412,10 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             # the user already gave a good guess of what the parameters are
             lindiff_inp['parameters_main'] = inp_d['parameters_main']
 
+        # setting just one replay calculation in the first 2 iterations, to reduce total simulation time
         if self.ctx.diff_counter < 3:
             diffusion_parameters_d = lindiff_inp['diffusion_parameters'].get_dict()
-            diffusion_parameters_d['max_nr_of_replays'] = 1 # setting just one replay calculation in the first 2 iterations
-            # to reduce total simulation time.
+            diffusion_parameters_d['max_nr_of_replays'] = 1
             lindiff_inp['diffusion_parameters'] = get_or_create_parameters(diffusion_parameters_d, store=True)
 
         diff = LindiffusionCalculation(**lindiff_inp)
@@ -437,7 +435,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         """
         from fitting import get_configurations_from_trajectories_inline, FittingFromTrajectoryCalculation
 
-        diffusion_convergence_parameters_d =  self.inputs.diffusion_convergence_parameters.get_dict()
+        diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
         lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
                     nr_of_calcs=1)[0]
 
@@ -475,7 +473,6 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             self.goto(self.collect)
         elif lastcalc.get_state() == 'FAILED':
             raise Exception("Last diffusion {} failed with message:\n{}".format(lastcalc, lastcalc.get_attr('fail_msg')))
-
         elif diffusion_convergence_parameters_d['min_iterations'] > self.ctx.diff_counter:
             # just launch the next!
             print 'Did not run enough'
@@ -498,11 +495,16 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
                 abs(diffusions.mean()) >  1e-12 and # avoid division by 0
                 abs(diffusions.std()/diffusions.mean()) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel'] ):
                 # Checked relative convergence by dividing the standard deviation by the mean
-                self.got(self.collect)
+                self.goto(self.collect)
             else:
                 self.goto(self.run_fit)
 
     def collect(self):
         last_calc = self._get_last_diffs(nr_of_calcs=1)[-1]
+        try:
+            g = Group.get_from_string(self.inputs.diffusion_convergence_parameters.dict.results_group_name)
+            g.add_nodes(last_calc.out.msd_results)
+        except Exception as e:
+            pass
         self.goto(self.exit)
-        return {'converged_msd_results':last_calc.out.msd_results}
+        return {'converged_msd_results': last_calc.out.msd_results}

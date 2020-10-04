@@ -86,7 +86,7 @@ class ReplayCalculation(ChillstepCalculation):
             input_dict['CONTROL']['nstep'] = self.ctx.steps_todo
         # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
         input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9))
-        if not input_dict['CONTROL'].get('lflipper', False):
+        if not input_dict['CONTROL'].get('lflipper', False) and not input_dict['CONTROL'].get('lhustle', False):
             input_dict['IONS']['wfc_extrapolation'] = 'second_order'
             input_dict['IONS']['pot_extrapolation'] = 'second_order'
         # set the resources:
@@ -97,7 +97,8 @@ class ReplayCalculation(ChillstepCalculation):
         calc.set_resources(resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
         calc.set_queue_name(queue_name)
-        calc.set_custom_scheduler_commands(custom_scheduler_commands)
+        if custom_scheduler_commands is not None:
+            calc.set_custom_scheduler_commands(custom_scheduler_commands)
         try:
             # There's something very strange going on: This works only for flipper, not for Hustler! Why???
             calc._set_parent_remotedata(self.inp.remote_folder)
