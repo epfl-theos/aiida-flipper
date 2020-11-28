@@ -101,11 +101,11 @@ class SinglescfCalculation(ChillstepCalculation):
         charge_calc_param_dict = copy.deepcopy(CHARGE_PARAMS_DICT)
         pseudofamily = self.inp.parameters.dict.pseudofamily
 
-        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) -  len(self.inp.delithiated_structure.sites)
-        pseudos=get_pseudos(
+        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) - len(self.inp.delithiated_structure.sites)
+        pseudos = get_pseudos(
                         structure=self.inp.pinball_structure,
                         pseudo_family_name=pseudofamily,
-                )
+                        )
         ecutwfc, ecutrho = get_suggested_cutoff(pseudofamily, pseudos.values())
         #~ except Exception as e:
             #~ print "WARNING: defaulting to default cutoffs" 
@@ -113,11 +113,15 @@ class SinglescfCalculation(ChillstepCalculation):
         #~ for kind in set(pinball_structure.get_site_kindnames()).difference(delithiated_structure.get_site_kindnames()):
         # Remove Lithium from the pseudos
         pseudos.pop('Li')
+
         charge_calc_param_dict['ELECTRONS'] = self.inp.electron_parameters.get_dict()
         charge_calc_param_dict['SYSTEM']['tot_charge'] = -nr_of_atoms_removed
         charge_calc_param_dict['SYSTEM']['ecutwfc'] = ecutwfc
         charge_calc_param_dict['SYSTEM']['ecutrho'] = ecutrho
         charge_calc_param_dict['CONTROL']['max_seconds'] = self.inp.parameters.dict.walltime_seconds - 120
+        for key in ('occupations', 'smearing', 'degauss'):
+            if key in self.inp.parameters.dict:
+                charge_calc_param_dict['SYSTEM'][key] = self.inp.parameters.get_attr(key)
 
         params = get_or_create_parameters(charge_calc_param_dict)
         calc = self.inp.code.new_calc()
