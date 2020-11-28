@@ -138,6 +138,7 @@ def get_structure_from_trajectory_inline(trajectory, parameters, structure=None,
 
 
 def concatenate_trajectory(**kwargs):
+    remove_repeated_last_step = kwargs.pop('remove_repeated_last_step', True)
     for k, v in kwargs.iteritems():
         if not isinstance(v, TrajectoryData):
             raise Exception("All my inputs have to be instances of TrajectoryData")
@@ -149,16 +150,21 @@ def concatenate_trajectory(**kwargs):
         if arrname in SINGULAR_TRAJ_KEYS:
             traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
         else:
-            #traj.set_array(arrname, np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories]))
-            # concatenate arrays -- remove last step that is repeated when restarting, keep the very last
+            # concatenate arrays
             if len(sorted_trajectories) > 1:
-                traj.set_array(arrname, np.concatenate([
-                    np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories[:-1]]),
-                    sorted_trajectories[-1].get_array(arrname)]))
+                if remove_repeated_last_step:
+                    # remove last step that is repeated when restarting, keep the very last
+                    traj.set_array(arrname, np.concatenate([
+                        np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories[:-1]]),
+                        sorted_trajectories[-1].get_array(arrname)]))
+                else:
+                    # just concatenate - used e.g. for Hustler
+                    traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
             else:
                 traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
     [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
-    traj._set_attr('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attr('timestep_in_fs'))
+    if 'timestep_in_fs' in sorted_trajectories[0].attrs():
+        traj._set_attr('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attr('timestep_in_fs'))
     return {'concatenated_trajectory':traj}
     
 
@@ -168,7 +174,13 @@ def concatenate_trajectory_optional_inline(**kwargs):
 
 @make_inline
 def concatenate_trajectory_inline(**kwargs):
-    return concatenate_trajectory(**kwargs)
+    """Concatenate trajectory removing the last steps (repeated as first steps of the next trajectory)."""
+    return concatenate_trajectory(remove_repeated_last_step=True, **kwargs)
+
+@make_inline
+def concatenate_trajectory_new_inline(**kwargs):
+    """Concatenate trajectory keeping all the steps."""
+    return concatenate_trajectory(remove_repeated_last_step=False, **kwargs)
 
 @make_inline 
 def get_diffusion_from_msd_inline(**kwargs):

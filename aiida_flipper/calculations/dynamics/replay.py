@@ -9,7 +9,7 @@ from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.querybuilder import QueryBuilder
 
-from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, get_structure_from_trajectory_inline
+from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, concatenate_trajectory_new_inline, get_structure_from_trajectory_inline
 from aiida_flipper.utils import get_or_create_parameters
 
 import numpy as np
@@ -110,7 +110,6 @@ class ReplayCalculation(ChillstepCalculation):
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
         if moldyn_parameters_d.get('is_hustler', False):
-
             hustler_positions = self.inputs.hustler_positions
             if self.ctx.steps_done:
                 #~ self.ctx.array_splitting_indices.append(self.ctx.steps_done)
@@ -124,7 +123,6 @@ class ReplayCalculation(ChillstepCalculation):
         elif self.ctx.restart_from:
             # This is a restart from the previous calculation!
             lastcalc = load_node(self.ctx.restart_from)
-            input_dict['IONS']['ion_velocities'] = 'from_input'
             kwargs = dict(trajectory=lastcalc.out.output_trajectory,
                     parameters=get_or_create_parameters(dict(
                         step_index=-1,
@@ -142,6 +140,9 @@ class ReplayCalculation(ChillstepCalculation):
             calc.use_settings(res['settings'])
             return_d['get_structure'] = inlinec
 
+        # if settings contain velocities, use them
+        if 'settings' in calc.get_inputs_dict() and calc.inp.settings.get_attr('ATOMIC_VELOCITIES', None):
+            input_dict['IONS']['ion_velocities'] = 'from_input'
         calc.use_parameters(get_or_create_parameters(input_dict, store=True))
         calc.label = '{}-{}'.format(self.label or 'Replay', self.ctx.iteration)
         self.ctx.lastcalc_uuid = calc.uuid
@@ -209,14 +210,18 @@ class ReplayCalculation(ChillstepCalculation):
 
     def produce_output_trajectory(self):
         qb = QueryBuilder()
-        qb.append(ReplayCalculation, filters={'id':self.id}, tag='m')
+        qb.append(ReplayCalculation, filters={'id': self.id}, tag='m')
         # TODO: Are filters on the state of the calculation needed here?
         qb.append(Calculation, output_of='m', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
         # If I have produced several trajectories, I concatenate them here:
         if len(d) > 1:
-            calc, res = concatenate_trajectory_inline(**d)
+            if (self.inputs.moldyn_parameters.get_attr('is_hustler', False) or
+                    not(self.inputs.moldyn_parameters.get_attr('remove_repeated_last_step', True))):
+                calc, res = concatenate_trajectory_new_inline(**d)
+            else:
+                calc, res = concatenate_trajectory_inline(**d)
             returnval = {'concatenate':calc, 'total_trajectory':res['concatenated_trajectory']}
         elif len(d) == 1:
             # No reason to concatenate if I have only one trajectory (saves space in repository)
@@ -249,5 +254,7 @@ class ReplayCalculation(ChillstepCalculation):
         qb.append(Calculation, output_of='m', edge_project='label', filters={'state':calc_states.FINISHED}, edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
-        return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']
-
+        if self.inputs.moldyn_parameters.get_attr('is_hustler', False):
+            return concatenate_trajectory_new_inline(store=store, **d)['concatenated_trajectory']
+        else:
+            return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']
