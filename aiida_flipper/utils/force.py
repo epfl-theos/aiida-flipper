@@ -102,7 +102,7 @@ def fit_with_lin_reg(f_exact, f_trial, traj_file=None, coefs=None,
     x = np.array(signals)
     xT = x.T
 
-    coefs, sum_res, rank, s =  np.linalg.lstsq(xT, W)    #[0]  #+ 1.
+    coefs, sum_res, rank, s =  np.linalg.lstsq(xT, W, rcond=None)    #[0]  #+ 1.
 
     mae = np.sqrt(sum_res / len(W))
 
@@ -183,7 +183,7 @@ def plot_forces(forces, format_=None, nrows=1,
     for plot_index, form in enumerate(format_list):
         # Here I am expecting a list of fileindex1:format1, fileindex2:format2
         ax = fig.add_subplot(gs.next())
-        ax.grid(color='grey', linestyle='--', linewidth=2, alpha=0.35)
+        ax.grid(color='grey', linestyle='--')#, linewidth=2, alpha=0.35)
         spec1, spec2 = form.split(',')
         f1_idx_str, form1 = spec1.split(':')
         f2_idx_str, form2 = spec2.split(':')

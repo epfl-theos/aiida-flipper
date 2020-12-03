@@ -58,7 +58,9 @@ def rattle_randomly_structure_inline(structure, parameters):
 
 @make_inline
 def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
-    from aiida_flipper.utils import Force, fit_with_lin_reg, make_fitted, plot_forces
+    from aiida_flipper.utils import Force, fit_with_lin_reg, make_fitted
+    from scipy.stats import linregress
+
     params_dict = parameters.get_dict()
     starting_point = params_dict['starting_point']
     stepsize = params_dict['stepsize']
@@ -94,15 +96,39 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
 
     coefs, mae = fit_with_lin_reg(forces_scf, forces_pb,
             verbosity=0, divide_r2=params_dict['divide_r2'], signal_indices=signal_indices)
-
-    #~ pb_fitted = make_fitted(forces_pb, coefs=coefs, signal_indices=signal_indices)
-    #~ plot_forces((forces_scf, pb_fitted))
     try:
         mae_f = float(mae)
     except:
         mae_f = None
 
-    return {'coefficients':ParameterData(dict=dict(coefs=coefs.tolist(), mae=mae_f, nr_of_coefs=len(coefs), indices_removed=sorted(starting_indices)))}
+    forces_pb_fitted = make_fitted(forces_pb, coefs=coefs, signal_indices=signal_indices)
+    slope_before_fit, intercept_before_fit, rvalue_before_fit, pvalue_before_fit, stderr_before_fit = linregress(
+            forces_scf.get_signal(0).flatten(), forces_pb_fitted.get_signal(0).flatten())
+    slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(
+            forces_scf.get_signal(0).flatten(), forces_pb.get_signal(0).flatten())
+    #~ plot_forces((forces_scf, pb_fitted))
+
+    coeff_params = ParameterData(dict={
+        'coefs': coefs.tolist(),
+        'mae': mae_f,
+        'nr_of_coefs': len(coefs),
+        'indices_removed': sorted(starting_indices),
+        'linreg_before_fit': {
+            'slope': slope_before_fit,
+            'intercept': intercept_before_fit,
+            'r2value': rvalue_before_fit**2,
+            'pvalue_zero_slope': pvalue_before_fit,
+            'stderr': stderr_before_fit
+            },
+        'linreg_after_fit': {
+            'slope': slope_after_fit,
+            'intercept': intercept_after_fit,
+            'r2value': rvalue_after_fit**2,
+            'pvalue_zero_slope': pvalue_after_fit,
+            'stderr': stderr_after_fit
+            },
+    })
+    return {'coefficients': coeff_params}
 
 @make_inline
 def get_structures_from_trajectories_inline(parameters, label='', description='', **branches):
