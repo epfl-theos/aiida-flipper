@@ -499,7 +499,15 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d,
                     nr_of_calcs=1)[0]
 
-        if diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
+        try:
+            user_wants_termination = self.ctx.force_termination
+        except AttributeError:
+            user_wants_termination = False
+
+        if user_wants_termination:
+            print 'User wishes termination'
+            self.goto(self.collect)
+        elif diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
             print 'Cannot run more'
             self.goto(self.collect)
         elif lastcalc.get_state() == 'FAILED':
