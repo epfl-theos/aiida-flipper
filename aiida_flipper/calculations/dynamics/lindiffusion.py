@@ -68,6 +68,7 @@ class LindiffusionCalculation(ChillstepCalculation):
 
         # The counter counts how many REPLAYS I launched
         self.ctx.replay_counter = 0
+        self.ctx.converged = False
 
 
     def thermalize(self):
@@ -218,10 +219,12 @@ class LindiffusionCalculation(ChillstepCalculation):
             elif (sem < sem_target):
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
                 print "The error ( {} ) is below the target value ( {} )".format(sem, sem_target)
+                self.ctx.converged = True
                 self.goto(self.collect)
             elif (sem_relative < sem_relative_target):
                 # the relative error is below my targe value
                 print "The relative error ( {} ) is below the target value ( {} )".format(sem_relative, sem_relative_target)
+                self.ctx.converged = True
                 self.goto(self.collect)
             else:
                 print "The error has not converged"
@@ -377,6 +380,8 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
 
         # The diff_counter counts how many LindiffusionCalculations I launched
         self.ctx.diff_counter = 0
+        self.ctx.converged = False
+
         # check if we should start by performing a fit over an old trajectory
         try:
             first_fit_trajectory = self.inp.first_fit_trajectory
@@ -520,6 +525,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
                 # all good, I have converged!
                 print 'Diffusion converged (std = {} < threshold = {})'.format(
                         diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s'])
+                self.ctx.converged = True
                 self.goto(self.collect)
             elif (
                 'diffusion_thr_cm2_s_rel' in diffusion_convergence_parameters_d and
@@ -528,6 +534,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
                 # Checked relative convergence by dividing the standard deviation by the mean
                 print 'Diffusion converged (std/mean = {} < rel_threshold = {})'.format(
                         diffusions.std()/diffusions.mean(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel'])
+                self.ctx.converged = True
                 self.goto(self.collect)
             else:
                 print 'Running fit...'
