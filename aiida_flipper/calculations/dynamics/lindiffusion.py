@@ -424,8 +424,9 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             # the user already gave a good guess of what the parameters are
             lindiff_inp['parameters_main'] = inp_d['parameters_main']
 
-        # setting just one replay calculation in the first 2 iterations, to reduce total simulation time
-        if self.ctx.diff_counter < 3:
+        # setting just one replay calculation in the first iteration, to reduce total simulation time
+        # Warning: this may lead to uncorrectly-detected convergence, if min_iterations == 1
+        if self.ctx.diff_counter < 1:
             diffusion_parameters_d = lindiff_inp['diffusion_parameters'].get_dict()
             diffusion_parameters_d['max_nr_of_replays'] = 1
             lindiff_inp['diffusion_parameters'] = get_or_create_parameters(diffusion_parameters_d, store=True)
