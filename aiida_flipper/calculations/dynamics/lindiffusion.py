@@ -87,6 +87,8 @@ class LindiffusionCalculation(ChillstepCalculation):
         c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
         for attr_key in ('num_machines', 'code_string'):
             c._set_attr(attr_key , self.get_attr(attr_key))
+        if self.get_attr('num_mpiprocs_per_machine', 0):
+            c._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
         # for the thermalizer: use the walltime specified in parameters if available
         if not 'max_wallclock_seconds' in inp_d['moldyn_parameters'].get_dict():
             c._set_attr('walltime_seconds', sel.get_attr('walltime_seconds'))
@@ -164,6 +166,8 @@ class LindiffusionCalculation(ChillstepCalculation):
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
             repl._set_attr(attr_key , self.get_attr(attr_key))
+        if self.get_attr('num_mpiprocs_per_machine', 0):
+            repl._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
         returnval['replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0)))] = repl
 
         # Last thing I do is set up the counter:
@@ -437,9 +441,11 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             lindiff_inp['diffusion_parameters'] = get_or_create_parameters(diffusion_parameters_d, store=True)
 
         diff = LindiffusionCalculation(**lindiff_inp)
-        diff.label = '{}{}diff-{}'.format(self.label, '-' if self.label else '', self.ctx.diff_counter)
+        diff.label = '{}{}diff-{}'.format(self.label, '-' if self.label else '', self.ctx.diff_counter) # THIS LINE SHOULD BE MOVED AFTER diff_counter IS INCREASED
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
             diff._set_attr(attr_key , self.get_attr(attr_key))
+        if self.get_attr('num_mpiprocs_per_machine', 0):
+            diff._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
 
         self.goto(self.check)
         self.ctx.diff_counter += 1

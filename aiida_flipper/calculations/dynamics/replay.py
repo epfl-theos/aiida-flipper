@@ -92,6 +92,10 @@ class ReplayCalculation(ChillstepCalculation):
         # set the resources:
         try:
             resources = {"num_machines": self.ctx.num_machines}
+            try:
+                resources["num_mpiprocs_per_machine"] = self.ctx.num_mpiprocs_per_machine
+            except (KeyError, AttributeError):
+                pass
         except (KeyError, AttributeError):
             resources = self.inputs.moldyn_parameters.dict.resources
         calc.set_resources(resources)

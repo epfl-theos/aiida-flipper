@@ -289,7 +289,10 @@ class FittingCalculation(ChillstepCalculation):
         parameters_input_flipper['IONS'] = {}
 
         flipper_calc.use_parameters(get_or_create_parameters(parameters_input_flipper))
-        flipper_calc.set_resources(dict(num_machines=chargecalc.get_resources()["num_machines"]))
+        flipper_resources = {'num_machines': chargecalc.get_resources()['num_machines']}
+        if chargecalc.get_resources().get('num_mpiprocs_per_machine', 0):
+            flipper_resources['num_mpiprocs_per_machine'] = chargecalc.get_resources().get('num_mpiprocs_per_machine')
+        flipper_calc.set_resources(flipper_resources)
         flipper_calc.set_max_wallclock_seconds(self.inp.parameters.dict.flipper_walltime_seconds)
         flipper_calc._set_attr('is_flipper', True)
         flipper_calc._set_attr('is_hustler', True)
@@ -314,7 +317,10 @@ class FittingCalculation(ChillstepCalculation):
         parameters_input_dft['ELECTRONS'] = self.inp.electron_parameters.get_dict()
 
         dft_calc.use_parameters(get_or_create_parameters(parameters_input_dft))
-        dft_calc.set_resources(dict(num_machines=self.inp.parameters.dict.dft_num_machines))
+        dft_resources = {"num_machines": self.inp.parameters.dict.dft_num_machines}
+        if self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine", 0):
+            dft_resources["num_mpiprocs_per_machine"] = self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine")
+        dft_calc.set_resources(dft_resources)
         dft_calc.set_max_wallclock_seconds(self.inp.parameters.dict.dft_walltime_seconds)
         for k,v in pseudos.iteritems():
             dft_calc.use_pseudo(v, k)
@@ -339,22 +345,28 @@ class FittingCalculation(ChillstepCalculation):
         # pseudos=get_pseudos(structure=structure,pseudo_family_name=pseudofamily)
         # building parameters for DFT Replay!
 
+        dft_resources = {'num_machines': own_parameters['dft_num_machines']}
+        if own_parameters.get('dft_num_mpiprocs_per_machine', 0):
+            dft_resources['num_mpiprocs_per_machine'] = own_parameters.get('dft_num_mpiprocs_per_machine')
         inputs_dft = dict(
             moldyn_parameters=get_or_create_parameters(dict(
                     nstep=self.ctx.nstep,
                     max_wallclock_seconds=own_parameters['dft_walltime_seconds'],
-                    resources=dict(num_machines=own_parameters['dft_num_machines']),
+                    resources=dft_resources,
                     is_hustler=True,
                 ), store=True),
             structure=own_inputs['structure'],
             hustler_positions=positions,
             parameters=own_inputs['parameters_dft'],
         )
+        flipper_resources = {'num_machines': own_parameters['flipper_num_machines']}
+        if own_parameters.get('flipper_num_mpiprocs_per_machine', 0):
+            flipper_resources['num_mpiprocs_per_machine'] = own_parameters.get('flipper_num_mpiprocs_per_machine')
         inputs_flipper = dict(
             moldyn_parameters=get_or_create_parameters(dict(
                     nstep=self.ctx.nstep,
                     max_wallclock_seconds=own_parameters['flipper_walltime_seconds'],
-                    resources=dict(num_machines=own_parameters['flipper_num_machines']),
+                    resources=flipper_resources,
                     is_hustler=True,
                 ), store=True),
             structure=own_inputs['structure'],

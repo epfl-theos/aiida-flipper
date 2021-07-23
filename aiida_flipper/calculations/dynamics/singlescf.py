@@ -126,7 +126,10 @@ class SinglescfCalculation(ChillstepCalculation):
         params = get_or_create_parameters(charge_calc_param_dict)
         calc = self.inp.code.new_calc()
 
-        calc.set_resources({"num_machines": self.inp.parameters.dict.num_machines})
+        resources = {"num_machines": self.inp.parameters.dict.num_machines}
+        if self.inp.parameters.get_attr("num_mpiprocs_per_machine", 0):
+            resources["num_mpiprocs_per_machine"] = self.inp.parameters.get_attr("num_mpiprocs_per_machine")
+        calc.set_resources(resources)
         calc.set_max_wallclock_seconds(self.inp.parameters.dict.walltime_seconds)
         calc.use_parameters(params)
         calc.use_structure(self.inp.delithiated_structure)
