@@ -1,3 +1,5 @@
+#!/usr/bin/env runaiida
+
 from delete_nodes import delete_nodes_serial
 from aiida.common.datastructures import calc_states
 from sqlalchemy.sql import text
@@ -24,6 +26,9 @@ def set_states(pks, newstate, job_id=None):
         elif oldstate in ('SUBMITTING', 'SUBMISSIONFAILED') and newstate == 'TOSUBMIT':
             outputs_to_del = [n.pk for n in calc.get_outputs()]
             states_to_del = ('SUBMITTING', 'SUBMISSIONFAILED')
+        elif oldstate in ('SUBMITTING') and newstate == 'WITHSCHEDULER':  # Loris
+            outputs_to_del = []
+            states_to_del = []
         elif oldstate in ('FAILED', 'RETRIEVALFAILED', 'PARSINGFAILED') and newstate == 'TOSUBMIT':
             outputs_to_del = [n.pk for n in calc.get_outputs()]
             states_to_del = ('PARSING', 'RETRIEVING', 'COMPUTED', 'PARSINGFAILED', 'FAILED', 'WITHSCHEDULER', 'SUBMITTING', 'SUBMISSIONFAILED', 'RETRIEVALFAILED')

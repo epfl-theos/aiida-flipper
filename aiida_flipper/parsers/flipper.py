@@ -150,7 +150,6 @@ class FlipperParser(Parser):
         for_file = os.path.join(out_folder.get_abs_path('.'), self._calc._FOR_FILE)
         vel_file = os.path.join(out_folder.get_abs_path('.'), self._calc._VEL_FILE)
 
-
         new_nodes_list = []
 
         ########################## OUTPUT FILE ##################################
@@ -174,6 +173,7 @@ class FlipperParser(Parser):
             except:
                 walltime = -1.
             try:
+                # TODO: This does not work!!
                 nstep = get_nstep_from_outputf(txt)
             except:
                 nstep = -1
@@ -222,13 +222,13 @@ class FlipperParser(Parser):
 
         with open(evp_file) as f:
             try:
-                scalar_quantities = np.array([
-                        map(float, line.split()[1:8])
-                        for line
-                        in f.readlines()
-                    ])
+                # Using np.genfromtxt instead of np.loadtxt, because this function
+                # gives NaN to a value it cannot read, and doesn't throw an error!
+                scalar_quantities = np.genfromtxt(f, usecols=range(1,8))
                 if scalar_quantities.shape[1] != 7:
                     raise ValueError("Bad shape detected {}".format(scalar_quantities.shape))
+                f.seek(0)
+                convergence = np.genfromtxt(f, dtype='S1', usecols=(8), converters={8: (lambda s: F90_BOOL_DICT[s])})
             except (ValueError, IndexError) as e:
                 # There was an error conversion, it has happened
                 # that '************' appears in an evp file....
@@ -242,11 +242,12 @@ class FlipperParser(Parser):
                 # This is much slower, but the only way to things properly
                 try:
                     scalar_quantities = np.empty((idx,8))
+                    convergence = np.empty(idx)
                 except NameError:
                     raise OutputParsingError("Empty file {}".format(evp_file))
                 f.seek(0)
                 for iline, line in enumerate(f.readlines()):
-                    if iline==idx:
+                    if (iline == idx):
                         break
                     for ival, val in enumerate(line.split()[1:8]):
                         try:
@@ -254,17 +255,12 @@ class FlipperParser(Parser):
                         except ValueError:
                             # print line
                             scalar_quantities[iline, ival] = np.nan
+                    try:
+                        convergence[iline] = F90_BOOL_DICT[line.split()[8]]
+                    except KeyError:
+                        convergence[iline] = np.nan
                 # print scalar_quantities[-1,:]
                 # np.save(evp_file.replace('evp', 'npy'),scalar_quantities)
-
-        # Reading the convergence in a different loop
-        with open(evp_file) as f:
-            try:
-                convergence = np.array([F90_BOOL_DICT[line.split()[8]] for line in f.readlines()])
-            except Exception as e:
-                print e
-
-
 
         if len(scalar_quantities) == 0:
             raise OutputParsingError("No scalar quantities in output")
@@ -303,7 +299,6 @@ class FlipperParser(Parser):
             velocities = get_coords_from_file(vel_file, POS_BLOCK_REGEX, POS_REGEX_3)
         except ValueError:
             velocities = get_coords_from_file_slow_and_steady(vel_file, 3)
-
 
         trajectory_data = TrajectoryData()
 
@@ -392,7 +387,6 @@ class FlipperParser(Parser):
             velocities=velocities,
         )
 
-
         trajectory_data._set_attr('atoms',in_struc.get_site_kindnames())
 
         if timestep_in_fs is not None:
@@ -451,10 +445,15 @@ class FlipperParser(Parser):
 
         new_nodes_list.append((self.get_linkname_outtrajectory(), trajectory_data))
 
-        for arr in (forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures):
-            if np.isnan(arr).any():
-                successful = False
 
+        # comment the following if you want this check.
+        # For the hustler I don't want it
+        if not calc_input.dict.CONTROL.get('lhustle', False):
+            for idx, arr in enumerate((forces, positions, velocities, kinetic_energies, potential_energies, total_energies, temperatures)):
+                if np.isnan(arr).any():
+                    print("Array {} contains NAN".format(idx))
+                    successful = False
+        
         return successful, new_nodes_list
 
     def get_parser_settings_key(self):

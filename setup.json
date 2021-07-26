@@ -1,18 +1,21 @@
 {
-    "version": "1.0.0",
+    "version": "1.3.0",
     "name": "aiida_flipper",
-    "url": "http://www.example.com",
+    "url": "https://github.com/lekah/aiida_flipper",
     "license": "MIT License",
     "author": "Leonid Kahle",
     "author_email": "leonid.kahle@epfl.ch",
-    "description": "For flipper",
+    "description": "The AiiDA plugin for QE Pinball",
     "classifiers": [
+        "Framework :: AiiDA",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 2.7",
         "Development Status :: 4 - Beta"
     ],
+    "python_requires": ">=2.7,!=3.*",
     "install_requires": [
-        "aiida"
+        "aiida-core==0.10.1",
+        "samos>=0.3.1"
     ],
     "entry_points": {
         "aiida.calculations": [
@@ -20,7 +23,8 @@
             "quantumespresso.pes = aiida_flipper.calculations.pes:PesCalculation",
             "quantumespresso.hustler = aiida_flipper.calculations.hustler:HustlerCalculation",
             "chillstep.branching=aiida_flipper.calculations.branching.BranchingCalculation",
-            "chillstep.moldyn=aiida_flipper.calculations.moldyn.MoldynCalculation"
+            "chillstep.lindiffusion=aiida_flipper.calculations.lindiffusion.LindiffusionCalculation",
+            "chillstep.convergediffusion=aiida_flipper.calculations.lindiffusion.ConvergeDiffusionCalculation"
          ],
         "aiida.parsers": [
             "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",

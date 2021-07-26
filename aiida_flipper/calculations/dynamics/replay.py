@@ -9,7 +9,7 @@ from aiida.orm.data.array.trajectory import TrajectoryData
 from aiida.orm.data.parameter import ParameterData
 from aiida.orm.querybuilder import QueryBuilder
 
-from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, get_structure_from_trajectory_inline
+from aiida_flipper.calculations.inline_calcs import concatenate_trajectory_inline, concatenate_trajectory_new_inline, get_structure_from_trajectory_inline
 from aiida_flipper.utils import get_or_create_parameters
 
 import numpy as np
@@ -69,6 +69,8 @@ class ReplayCalculation(ChillstepCalculation):
             max_wallclock_seconds = self.ctx.walltime_seconds
         except (AttributeError, KeyError):
             max_wallclock_seconds = moldyn_parameters_d['max_wallclock_seconds']
+        queue_name = moldyn_parameters_d.get('queue_name', None)
+        custom_scheduler_commands = moldyn_parameters_d.get('custom_scheduler_commands', None)
 
         for linkname, input_node in self.get_inputs_dict().iteritems():
             if linkname.startswith('moldyn_'): # stuff only for the moldyn workflow has this prefix!
@@ -84,16 +86,23 @@ class ReplayCalculation(ChillstepCalculation):
             input_dict['CONTROL']['nstep'] = self.ctx.steps_todo
         # Give the code 3 minnutes to terminate gracefully, or 90% of your estimate (for very low numbers, to avoid negative)
         input_dict['CONTROL']['max_seconds'] = max((max_wallclock_seconds-180, max_wallclock_seconds*0.9))
-        if not input_dict['CONTROL'].get('lflipper', False):
+        if not input_dict['CONTROL'].get('lflipper', False) and not input_dict['CONTROL'].get('lhustle', False):
             input_dict['IONS']['wfc_extrapolation'] = 'second_order'
             input_dict['IONS']['pot_extrapolation'] = 'second_order'
         # set the resources:
         try:
-            resources = {"num_machines":self.ctx.num_machines}
+            resources = {"num_machines": self.ctx.num_machines}
+            try:
+                resources["num_mpiprocs_per_machine"] = self.ctx.num_mpiprocs_per_machine
+            except (KeyError, AttributeError):
+                pass
         except (KeyError, AttributeError):
             resources = self.inputs.moldyn_parameters.dict.resources
         calc.set_resources(resources)
         calc.set_max_wallclock_seconds(max_wallclock_seconds)
+        calc.set_queue_name(queue_name)
+        if custom_scheduler_commands is not None:
+            calc.set_custom_scheduler_commands(custom_scheduler_commands)
         try:
             # There's something very strange going on: This works only for flipper, not for Hustler! Why???
             calc._set_parent_remotedata(self.inp.remote_folder)
@@ -105,7 +114,6 @@ class ReplayCalculation(ChillstepCalculation):
         # to give me a new structure and new settings!
         return_d = {'calc_{}'.format(str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)),str(0))):calc}
         if moldyn_parameters_d.get('is_hustler', False):
-
             hustler_positions = self.inputs.hustler_positions
             if self.ctx.steps_done:
                 #~ self.ctx.array_splitting_indices.append(self.ctx.steps_done)
@@ -119,7 +127,6 @@ class ReplayCalculation(ChillstepCalculation):
         elif self.ctx.restart_from:
             # This is a restart from the previous calculation!
             lastcalc = load_node(self.ctx.restart_from)
-            input_dict['IONS']['ion_velocities'] = 'from_input'
             kwargs = dict(trajectory=lastcalc.out.output_trajectory,
                     parameters=get_or_create_parameters(dict(
                         step_index=-1,
@@ -137,11 +144,15 @@ class ReplayCalculation(ChillstepCalculation):
             calc.use_settings(res['settings'])
             return_d['get_structure'] = inlinec
 
+        # if settings contain velocities, use them
+        if 'settings' in calc.get_inputs_dict() and calc.inp.settings.get_attr('ATOMIC_VELOCITIES', None):
+            input_dict['IONS']['ion_velocities'] = 'from_input'
         calc.use_parameters(get_or_create_parameters(input_dict, store=True))
         calc.label = '{}-{}'.format(self.label or 'Replay', self.ctx.iteration)
         self.ctx.lastcalc_uuid = calc.uuid
         self.goto(self.evaluate_calc)
         return return_d
+
 
     def evaluate_calc(self):
         lastcalc = load_node(self.ctx.lastcalc_uuid)
@@ -201,17 +212,20 @@ class ReplayCalculation(ChillstepCalculation):
                 self.goto(self.produce_output_trajectory)
 
 
-
     def produce_output_trajectory(self):
         qb = QueryBuilder()
-        qb.append(ReplayCalculation, filters={'id':self.id}, tag='m')
+        qb.append(ReplayCalculation, filters={'id': self.id}, tag='m')
         # TODO: Are filters on the state of the calculation needed here?
         qb.append(Calculation, output_of='m', edge_project='label', edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
         # If I have produced several trajectories, I concatenate them here:
         if len(d) > 1:
-            calc, res = concatenate_trajectory_inline(**d)
+            if (self.inputs.moldyn_parameters.get_attr('is_hustler', False) or
+                    not(self.inputs.moldyn_parameters.get_attr('remove_repeated_last_step', True))):
+                calc, res = concatenate_trajectory_new_inline(**d)
+            else:
+                calc, res = concatenate_trajectory_inline(**d)
             returnval = {'concatenate':calc, 'total_trajectory':res['concatenated_trajectory']}
         elif len(d) == 1:
             # No reason to concatenate if I have only one trajectory (saves space in repository)
@@ -224,6 +238,7 @@ class ReplayCalculation(ChillstepCalculation):
         self.goto(self.exit)
         return returnval
 
+
     def get_slave_calculations(self):
         """
         Returns a list of the calculations that was called by the WF, ordered.
@@ -235,6 +250,7 @@ class ReplayCalculation(ChillstepCalculation):
         sorted_calcs = sorted(d.items())
         return zip(*sorted_calcs)[1]
 
+
     def get_output_trajectory(self, store=False):
         # I don't even have to be finished,  for this
         qb = QueryBuilder()
@@ -242,10 +258,7 @@ class ReplayCalculation(ChillstepCalculation):
         qb.append(Calculation, output_of='m', edge_project='label', filters={'state':calc_states.FINISHED}, edge_filters={'type':LinkType.CALL.value, 'label':{'like':'calc_%'}}, tag='c', edge_tag='mc')
         qb.append(TrajectoryData, output_of='c', project='*', tag='t')
         d = {item['mc']['label'].replace('calc_', 'trajectory_'):item['t']['*'] for item in qb.iterdict()}
-        return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']
-
-        
-        
-        
-        
-        
+        if self.inputs.moldyn_parameters.get_attr('is_hustler', False):
+            return concatenate_trajectory_new_inline(store=store, **d)['concatenated_trajectory']
+        else:
+            return concatenate_trajectory_inline(store=store, **d)['concatenated_trajectory']

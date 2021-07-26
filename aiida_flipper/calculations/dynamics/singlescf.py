@@ -2,7 +2,7 @@ import copy, os
 
 from aiida.backends.utils import get_authinfo
 from aiida.common.datastructures import calc_states
-from aiida.orm import Data, load_node, Calculation, DataFactory
+from aiida.orm import Data, load_node, Calculation, DataFactory, Computer
 from aiida.orm.calculation.chillstep import ChillstepCalculation
 from aiida.orm.calculation.inline import make_inline
 from aiida.orm.data.parameter import ParameterData
@@ -42,8 +42,6 @@ def copy_directory(remote_folder, parameters):
                             aiidauser=remote_folder.get_user()).get_transport()
     source_dir = os.path.join(remote_folder.get_remote_path(), calc._OUTPUT_SUBFOLDER)
 
-
-
     with t_dest, t_source:
         # build the destination folder
         t_dest.chdir(dest_dir)
@@ -57,6 +55,7 @@ def copy_directory(remote_folder, parameters):
         t_dest.mkdir(calcuuid[4:])
         t_dest.chdir(calcuuid[4:])
         final_dest_dir = t_dest.getcwd()
+        print 'Copying directory "{}" to "{}"'.format(source_dir, final_dest_dir)
         # copying files!
         t_source.copy(source_dir, final_dest_dir)
     return {'copied_remote_folder': RemoteData(computer=computer_dest,
@@ -102,11 +101,11 @@ class SinglescfCalculation(ChillstepCalculation):
         charge_calc_param_dict = copy.deepcopy(CHARGE_PARAMS_DICT)
         pseudofamily = self.inp.parameters.dict.pseudofamily
 
-        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) -  len(self.inp.delithiated_structure.sites)
-        pseudos=get_pseudos(
+        nr_of_atoms_removed = len(self.inp.pinball_structure.sites) - len(self.inp.delithiated_structure.sites)
+        pseudos = get_pseudos(
                         structure=self.inp.pinball_structure,
                         pseudo_family_name=pseudofamily,
-                )
+                        )
         ecutwfc, ecutrho = get_suggested_cutoff(pseudofamily, pseudos.values())
         #~ except Exception as e:
             #~ print "WARNING: defaulting to default cutoffs" 
@@ -114,16 +113,23 @@ class SinglescfCalculation(ChillstepCalculation):
         #~ for kind in set(pinball_structure.get_site_kindnames()).difference(delithiated_structure.get_site_kindnames()):
         # Remove Lithium from the pseudos
         pseudos.pop('Li')
+
         charge_calc_param_dict['ELECTRONS'] = self.inp.electron_parameters.get_dict()
         charge_calc_param_dict['SYSTEM']['tot_charge'] = -nr_of_atoms_removed
         charge_calc_param_dict['SYSTEM']['ecutwfc'] = ecutwfc
         charge_calc_param_dict['SYSTEM']['ecutrho'] = ecutrho
         charge_calc_param_dict['CONTROL']['max_seconds'] = self.inp.parameters.dict.walltime_seconds - 120
+        for key in ('occupations', 'smearing', 'degauss'):
+            if key in self.inp.parameters.dict:
+                charge_calc_param_dict['SYSTEM'][key] = self.inp.parameters.get_attr(key)
 
         params = get_or_create_parameters(charge_calc_param_dict)
         calc = self.inp.code.new_calc()
 
-        calc.set_resources({"num_machines": self.inp.parameters.dict.num_machines})
+        resources = {"num_machines": self.inp.parameters.dict.num_machines}
+        if self.inp.parameters.get_attr("num_mpiprocs_per_machine", 0):
+            resources["num_mpiprocs_per_machine"] = self.inp.parameters.get_attr("num_mpiprocs_per_machine")
+        calc.set_resources(resources)
         calc.set_max_wallclock_seconds(self.inp.parameters.dict.walltime_seconds)
         calc.use_parameters(params)
         calc.use_structure(self.inp.delithiated_structure)

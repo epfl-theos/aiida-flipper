@@ -6,7 +6,7 @@ from aiida.orm.data.parameter import ParameterData
 from math import ceil as math_ceil
 import numpy as np
 
-SINGULAR_TRAJ_KEYS = ('symbols','atomic_species_name')
+SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
 @optional_inline
 def remove_lithium_from_structure_inline(structure, parameters):
@@ -137,11 +137,8 @@ def get_structure_from_trajectory_inline(trajectory, parameters, structure=None,
 
 
 
-
-
-
-
 def concatenate_trajectory(**kwargs):
+    remove_repeated_last_step = kwargs.pop('remove_repeated_last_step', True)
     for k, v in kwargs.iteritems():
         if not isinstance(v, TrajectoryData):
             raise Exception("All my inputs have to be instances of TrajectoryData")
@@ -153,89 +150,158 @@ def concatenate_trajectory(**kwargs):
         if arrname in SINGULAR_TRAJ_KEYS:
             traj.set_array(arrname, sorted_trajectories[0].get_array(arrname))
         else:
-            traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
+            # concatenate arrays
+            if len(sorted_trajectories) > 1:
+                if remove_repeated_last_step:
+                    # remove last step that is repeated when restarting, keep the very last
+                    traj.set_array(arrname, np.concatenate([
+                        np.concatenate([t.get_array(arrname)[:-1] for t in sorted_trajectories[:-1]]),
+                        sorted_trajectories[-1].get_array(arrname)]))
+                else:
+                    # just concatenate - used e.g. for Hustler
+                    traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
+            else:
+                traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
     [traj._set_attr(k,v) for k,v in sorted_trajectories[0].get_attrs().items() if not k.startswith('array|')]
+    if 'timestep_in_fs' in sorted_trajectories[0].attrs():
+        traj._set_attr('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attr('timestep_in_fs'))
     return {'concatenated_trajectory':traj}
     
 
 @optional_inline
 def concatenate_trajectory_optional_inline(**kwargs):
     return concatenate_trajectory(**kwargs)
+
 @make_inline
 def concatenate_trajectory_inline(**kwargs):
-    return concatenate_trajectory(**kwargs)
+    """Concatenate trajectory removing the last steps (repeated as first steps of the next trajectory)."""
+    return concatenate_trajectory(remove_repeated_last_step=True, **kwargs)
+
+@make_inline
+def concatenate_trajectory_new_inline(**kwargs):
+    """Concatenate trajectory keeping all the steps."""
+    return concatenate_trajectory(remove_repeated_last_step=False, **kwargs)
 
 @make_inline 
 def get_diffusion_from_msd_inline(**kwargs):
     return get_diffusion_from_msd(**kwargs)
 
 def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
+    """
+    Compute the Diffusion coefficient from the mean-square displacement.
 
-    from aiida.common.constants import timeau_to_sec
-    from mdtools.libs.mdlib.trajectory_analysis import TrajectoryAnalyzer
+    :param structure:  the StructureData node or the ASE of the trajectories
+    :param parameters: a ParameterData node or a dictionary containing the parameters for MSD computation. Specifically:
+        equilibration_time_fs
+    and all the other samos.DynamicsAnalyzer.get_msd input parameters:
+        species_of_interest
+        stepsize_t
+        stepsize_tau
+        t_start_fs OR t_start_ps OR t_start_dt
+        t_end_fs OR t_end_ps OR t_end_dt
+        nr_of_blocks OR block_length_fs OR block_length_ps OR block_length_dt
+        t_start_fit_fs OR t_start_fit_ps OR t_start_fit_dt
+        t_end_fit_fs OR t_end_fit_ps OR t_end_fit_dt
+        do_long
+        t_long_end_fs OR t_long_end_ps OR t_long_end_dt OR t_long_factor
+        do_com
 
-    parameters_d = parameters.get_dict()
+    If t_start_fit and t_end_fit are arrays, the Diffusion coefficient will be calculated for each pair of values.
+    This allows one to study its convergence as a function of the window chosen to fit the MSD.
+    """
+
+    from aiida.common.constants import timeau_to_sec, bohr_to_ang
+    from samos.trajectory import Trajectory
+    from samos.analysis.dynamics import DynamicsAnalyzer
+    from ase import Atoms
+
+    if isinstance(structure, StructureData):
+        atoms = structure.get_ase()
+    elif isinstance(structure, Atoms):
+        atoms = structure
+    else:
+        raise TypeError("structure type not valid")
+    if isinstance(parameters, ParameterData):
+        parameters_d = parameters.get_dict()
+    elif isinstance(parameters, dict):
+        parameters_d = parameters.copy()
+    else:
+        raise TypeError("parameters type not valid")
+    for traj in trajectories.itervalues():
+        if not isinstance(traj, TrajectoryData):
+            raise TypeError("trajectories must be TrajectoryData")
     trajdata_list = trajectories.values()
 
     ####################### CHECKS ####################
     units_set = set()
     timesteps_set = set()
-    units_set = set()
-    vel_units_set = set()
     for t in trajdata_list:
         units_set.add(t.get_attr('units|positions'))
-        vel_units_set.add(t.get_attr('units|velocities'))
     try:
         for t in trajdata_list:
             timesteps_set.add(t.get_attr('timestep_in_fs'))
-
     except AttributeError:
         for t in trajdata_list:
             input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
             # get the timestep on the fly
-            timesteps_set.add(timeau_to_sec*2*1e15*input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1))
+            timesteps_set.add(timeau_to_sec * 2 * 1e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1))
+
     # Checking if everything is consistent, 
     # Check same units:
     units_positions = units_set.pop()
     if units_set:
         raise Exception("Incommensurate units")
-    units_velocities = vel_units_set.pop()
-    if vel_units_set:
-        raise Exception("Incommensurate units")
-    # legacy:
-    if units_velocities == 'atomic':
-        units_velocities = 'pw'
     # Same timestep is mandatory!
     timestep_fs = timesteps_set.pop()
     if timesteps_set:
         timesteps_set.add(timestep_fs)
         raise Exception("Multiple timesteps {}".format(timesteps_set))
-    # I work with fs, not QE units!
-    #~ timestep_fs = timestep
-    equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
+    equilibration_steps = int(parameters_d.pop('equilibration_time_fs', 0) / timestep_fs)
+    if units_positions in ('bohr', 'atomic'):
+        pos_conversion = bohr_to_ang
+    elif units_positions == 'angstrom':
+        pos_conversion = 1.0
+    else:
+        raise RuntimeError("Unknown units for positions {}".format(units_positions))
 
-    trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
-    ta = TrajectoryAnalyzer(verbosity=0)
+    ####################### COMPUTE MSD ####################
+    trajectories = []
     species_of_interest = parameters_d.pop('species_of_interest', None)
-    ta.set_structure(structure, species_of_interest=species_of_interest)
-    ta.set_trajectories(
-            trajectories, # velocities=velocities if plot else None,
-            pos_units=units_positions, # vel_units=units_velocities,
-            timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
+    # if species_of_interest is unicode:
+    if isinstance(species_of_interest, (tuple, set, list)):
+        species_of_interest = map(str, species_of_interest)
+    for trajdata in trajdata_list:
+        positions = pos_conversion * trajdata.get_positions()[equilibration_steps:]
+        nat_in_traj = positions.shape[1]
+        trajectory = Trajectory(timestep=t.get_attr('timestep_in_fs'))
+        if nat_in_traj != len(atoms):
+            indices = [i for i, a in enumerate(atoms.get_chemical_symbols()) if a in species_of_interest]
+            if len(indices) == nat_in_traj:
+                trajectory.set_atoms(atoms[indices])
+            else:
+                raise ValueError("number of atoms in trajectory is weird")
+        else:
+            trajectory.set_atoms(atoms)
+        trajectory.set_positions(positions)
+        trajectories.append(trajectory)
 
-    res, arr = ta.get_msd(**parameters_d)
-    #~ print res["Li"]["diffusion_sem_cm2_s"]
+    # compute msd
+    dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity', 0))
+    dynanalyzer.set_trajectories(trajectories)
+    msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, **parameters_d)
+
     if plot_and_exit:
-        ta.plot_results()
-        return
+        raise NotImplementedError
+
+    # define MSD-results array
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
-    arr_data.set_array('msd', arr)
-    arr_data._set_attr('species_of_interest', species_of_interest)
-    for k,v in res.items():
-        arr_data._set_attr(k,v)
+    for arrayname in msd_iso.get_arraynames():
+        arr_data.set_array(arrayname, msd_iso.get_array(arrayname))
+    for attr, val in msd_iso.get_attrs().items():
+        arr_data._set_attr(attr, val)
 
-    return {'msd_results':arr_data}
+    return {'msd_results': arr_data}
 
 
 @make_inline
@@ -253,65 +319,59 @@ def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
     ####################### CHECKS ####################
     units_set = set()
     timesteps_set = set()
-    units_set = set()
-    vel_units_set = set()
     for t in trajdata_list:
         units_set.add(t.get_attr('units|positions'))
-        vel_units_set.add(t.get_attr('units|velocities'))
     try:
         for t in trajdata_list:
             timesteps_set.add(t.get_attr('timestep_in_fs'))
-
     except AttributeError:
         for t in trajdata_list:
             input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
             # get the timestep on the fly
-            timesteps_set.add(timeau_to_sec*2*1e15*input_dict['CONTROL']['dt']*input_dict['CONTROL'].get('iprint', 1))
+            timesteps_set.add(timeau_to_sec * 2 * 1e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1))
+
     # Checking if everything is consistent, 
     # Check same units:
     units_positions = units_set.pop()
     if units_set:
         raise Exception("Incommensurate units")
-    units_velocities = vel_units_set.pop()
-    if vel_units_set:
-        raise Exception("Incommensurate units")
-    # legacy:
-    if units_velocities == 'atomic':
-        units_velocities = 'pw'
     # Same timestep is mandatory!
     timestep_fs = timesteps_set.pop()
     if timesteps_set:
         timesteps_set.add(timestep_fs)
         raise Exception("Multiple timesteps {}".format(timesteps_set))
-
-    # I work with fs, not QE units!
-    #~ timestep_fs = timestep
     equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
 
+    ####################### COMPUTE MSD ####################
+    # TODO: update these lines to use samos DynamicAnalyzer
     trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
-    ta = TrajectoryAnalyzer(verbosity=0)
     species_of_interest = parameters_d.pop('species_of_interest', None)
+    ta = TrajectoryAnalyzer(verbosity=0)
     ta.set_structure(structure, species_of_interest=species_of_interest)
-    ta.set_trajectories(
-            trajectories, # velocities=velocities if plot else None,
-            pos_units=units_positions, # vel_units=units_velocities,
-            timestep_in_fs=timestep_fs, recenter=False,) # parameters_d.pop('recenter', False) Always recenter
-
+    ta.set_trajectories(trajectories, pos_units=units_positions, timestep_in_fs=timestep_fs, recenter=False)
     res, arr = ta.get_msd_decomposed(only_means=True, **parameters_d)
-    #~ ta.get_msd(**parameters_d)
-    #~ ta.plot_results()
 
-
+    # define MSD-results array
     arr_data = ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
     arr_data.set_array('msd_decomposed', arr)
     arr_data._set_attr('species_of_interest', species_of_interest)
     for k,v in res.items():
         arr_data._set_attr(k,v)
-    return {'msd_decomposed_results':arr_data}
+    return {'msd_decomposed_results': arr_data}
 
+  
+@make_inline
+def update_parameters_with_coefficients_inline(parameters, coefficients):
+    """
+    Updates the ParameterData instance passed with the coefficients
+    TODO: nonlocal vs local, currently on nonlocal is correclty implemented
+    """
+    coefs = coefficients.get_attr('coefs')
+    parameters_main_d = parameters.get_dict()
+    parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
+    parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
+    parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
+    parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
 
-
-
-
-
+    return {'updated_parameters':ParameterData(dict=parameters_main_d)}
