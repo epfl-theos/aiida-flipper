@@ -1,20 +1,22 @@
 {
     "version": "2.0.0a2",
     "name": "aiida_flipper",
-    "url": "",
+    "url": "https://github.com/lekah/aiida_flipper",
     "license": "MIT License",
-    "author": "Leonid Kahle",
-    "author_email": "leonid.kahle@epfl.ch",
-    "description": "For flipper",
+    "author": "Leonid Kahle, Loris Ercole",
+    "author_email": "leonid.kahle@epfl.ch, loris.ercole@epfl.ch",
+    "description": "The AiiDA plugin for QE Pinball",
     "classifiers": [
+        "Framework :: AiiDA",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Development Status :: 4 - Beta"
     ],
+    "python_requires": ">=3.6",
     "install_requires": [
-        "aiida_core[atomic_tools]~=1.2",
+        "aiida_core[atomic_tools]>=1.2",
         "samos>=0.3.1"
     ],
     "entry_points": {
