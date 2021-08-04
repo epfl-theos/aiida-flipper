@@ -10,6 +10,8 @@ def get_or_create_input_node(cls, value, store=True):
     :param cls: the `Node` class
     :param value: the value of the `Node`
     :param store: whether to store the new node
+    
+    check if we need other datatypes like arraydata
     """
     from aiida import orm
 

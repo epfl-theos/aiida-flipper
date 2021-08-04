@@ -70,7 +70,7 @@ def get_slave_calculations(workchain):
     return list(zip(*sorted_calcs))[1] if sorted_calcs else None
 
 
-class ReplayMdWorkChain(PwBaseWorkChain):
+class ReplayMDWorkChain(PwBaseWorkChain):
     """
     Workchain to run a molecular dynamics Quantum ESPRESSO pw.x calculation with automated error handling and restarts.
 
@@ -87,14 +87,14 @@ class ReplayMdWorkChain(PwBaseWorkChain):
     # set a `parent_folder`, such that the plugin will copy it to the new location when restarting.
     #
     # The parser of a FlipperCalculation will return an output trajectory node if it manages to parse it.
-    # As long as long as an output trajectory was produced, erros raised from the parsing of the aiida.out log file
+    # As long as an output trajectory was produced, erros raised from the parsing of the aiida.out log file
     # (e.g. out of walltime, incomplete output, ...) will be ignored and we shall try to (dirty) restart.
 
     ## QUESTION ##
     # probably we could define the `_process_class` at the instance level, thus allowing one to choose
     # to use either a `PwCalculation`, `FlipperCalculation`, or `HustlerCalculation` without redefining this class.
     # The drawback is probably that (I guess) the inputs will not be exposed (in the builder?)?
-    # Alternatively, one could just define subclasses were `_process_class` is set accordingly.
+    # Alternatively, one could just define subclasses where `_process_class` is set accordingly.
     _process_class = FlipperCalculation  # probably we can define this in a subclass
 
     defaults = AttributeDict({
