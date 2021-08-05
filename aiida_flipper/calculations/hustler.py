@@ -287,33 +287,6 @@ class HustlerCalculation(PwCalculation):
             atomic_positions_card += ''.join(lines)
             del lines
 
-        # Optional ATOMIC_VELOCITIES card
-        atomic_velocities = settings.pop('ATOMIC_VELOCITIES', None)
-        if atomic_velocities is not None:
-
-            # Checking that there are as many velocities defined as there are sites in the structure
-            if len(atomic_velocities) != len(structure.sites):
-                raise exceptions.InputValidationError(
-                    'Input structure contains {:d} sites, but atomic velocities has length {:d}'.format(
-                        len(structure.sites), len(atomic_velocities)
-                    )
-                )
-
-            lines = ['ATOMIC_VELOCITIES\n']
-            for site, vector in zip(structure.sites, atomic_velocities):
-
-                # Checking that all 3 dimensions are specified:
-                if len(vector) != 3:
-                    raise exceptions.InputValidationError(
-                        'Velocities({}) for {} has not length three'.format(vector, site)
-                    )
-
-                lines.append('{0} {1:18.10f} {2:18.10f} {3:18.10f}\n'.format(site.kind_name.ljust(6), *vector))
-
-            # Append to atomic_positions_card so that this card will be printed directly after
-            atomic_positions_card += ''.join(lines)
-            del lines
-
         # I set the variables that must be specified, related to the system
         # Set some variables (look out at the case! NAMELISTS should be
         # uppercase, internal flag names must be lowercase)

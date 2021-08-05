@@ -1,22 +1,14 @@
 from __future__ import absolute_import
 from __future__ import print_function
 from aiida.common.links import LinkType
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-from aiida.orm.calculation.chillstep.user.dynamics.replay import ReplayCalculation
-from aiida.orm import load_node, Group, Calculation, Code
-from aiida.orm.querybuilder import QueryBuilder
-from aiida.orm.data.array.trajectory import TrajectoryData
-from aiida.orm.data.upf import UpfData
-from aiida_flipper.calculations.inline_calcs import (
-    get_diffusion_from_msd_inline, get_diffusion_from_msd, get_structure_from_trajectory_inline, concatenate_trajectory,
-    concatenate_trajectory_inline, update_parameters_with_coefficients_inline
-)
-from aiida_flipper.utils import get_or_create_parameters
+from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
+from aiida_flipper.workflows.replaymd import ReplayMDWorkchain
+from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
+from aiida_flipper.utils.utils import get_or_create_input_node
 import six
 from six.moves import range
 
-
-class LindiffusionCalculation(ChillstepCalculation):
+class LindiffusionCalculation(PwBaseWorkchain):
 
     def _get_last_calc(self, diffusion_parameters_d=None):
         if diffusion_parameters_d is None:
@@ -35,7 +27,7 @@ class LindiffusionCalculation(ChillstepCalculation):
 
         for k, v in inp_d.items():
             # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, Calculation):
+            if isinstance(v, orm.CalculationNode):
                 inp_d.pop(k)
         # parameters_branching_d = inp_d.pop('parameters_branching').get_dict()
         # assert isinstance(parameters_branching_d['nr_of_branches'], int)
@@ -87,7 +79,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         inp_d.pop('diffusion_parameters')
         inp_d.pop('msd_parameters')
         self.goto(self.run_replays)
-        c = ReplayCalculation(**inp_d)
+        c = ReplayMDWorkchain(**inp_d)
         c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
         for attr_key in ('num_machines', 'code_string'):
             c._set_attr(attr_key, self.get_attr(attr_key))
@@ -142,7 +134,7 @@ class LindiffusionCalculation(ChillstepCalculation):
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
             kwargs = dict(
                 trajectory=last_calc.out.total_trajectory,
-                parameters=get_or_create_parameters(
+                parameters=get_or_create_input_node(
                     dict(step_index=-1, recenter=recenter, create_settings=True, complete_missing=create_missing),
                     store=True
                 ),
@@ -154,7 +146,7 @@ class LindiffusionCalculation(ChillstepCalculation):
             except:
                 pass  # settings will be None
 
-            inlinec, res = get_structure_from_trajectory_inline(**kwargs)
+            inlinec, res = get_structure_from_trajectory(**kwargs)
             returnval['get_structure'] = inlinec
             inp_d['settings'] = res['settings']
             inp_d['structure'] = res['structure']
@@ -163,9 +155,9 @@ class LindiffusionCalculation(ChillstepCalculation):
 #            # I have to set the parameters so that they read from input!
 #            params_for_calculation_d = inp_d['parameters'].get_dict()
 #            params_for_calculation_d['IONS']['ion_velocities'] = 'from_input'
-#            inp_d['parameters'] = get_or_create_parameters(params_for_calculation_d, store=True)
+#            inp_d['parameters'] = get_or_create_input_node(params_for_calculation_d, store=True)
 
-        repl = ReplayCalculation(**inp_d)
+        repl = ReplayMDWorkchain(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
             repl._set_attr(attr_key, self.get_attr(attr_key))
@@ -242,14 +234,14 @@ class LindiffusionCalculation(ChillstepCalculation):
 
     def collect(self):
         msd_parameters = self.inputs.msd_parameters
-        c1, res1 = concatenate_trajectory_inline(**self._get_trajectories())
+        c1, res1 = concatenate_trajectory(**self._get_trajectories())
         concatenated_trajectory = res1['concatenated_trajectory']
-        c2, res2 = get_diffusion_from_msd_inline(
+        c2, res2 = get_diffusion_from_msd(
             structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory
         )
         try:
             # Maybe I'm supposed to store the result?
-            g = Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
+            g = orm.Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
             g.add_nodes(res2['msd_results'])
         except Exception as e:
             pass
@@ -274,10 +266,10 @@ class LindiffusionCalculation(ChillstepCalculation):
         return msd_results
 
     def _get_trajectories(self):
-        qb = QueryBuilder()
+        qb = orm.QueryBuilder()
         qb.append(LindiffusionCalculation, filters={'id': self.id}, tag='ldc')
         qb.append(
-            ReplayCalculation,
+            ReplayMDWorkchain,
             output_of='ldc',
             edge_project='label',
             edge_filters={
@@ -290,7 +282,7 @@ class LindiffusionCalculation(ChillstepCalculation):
             edge_tag='mb'
         )
         qb.append(
-            TrajectoryData,
+            orm.TrajectoryData,
             output_of='repl',
             edge_filters={
                 'type': LinkType.RETURN.value,
@@ -302,7 +294,7 @@ class LindiffusionCalculation(ChillstepCalculation):
         return {'{}'.format(item['mb']['label']): item['t']['*'] for item in qb.iterdict()}
 
 
-class ConvergeDiffusionCalculation(ChillstepCalculation):
+class ConvergeDiffusionCalculation(PwBaseWorkchain):
     _diff_name = 'diff'
     _fit_name = 'fit'
 
@@ -352,7 +344,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         inp_d = self.get_inputs_dict()
         for k, v in inp_d.items():
             # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, Calculation):
+            if isinstance(v, orm.CalculationNode):
                 inp_d.pop(k)
 
         structure = inp_d.pop('structure')
@@ -422,12 +414,12 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         inp_d = self.get_inputs_dict()
         for k, v in inp_d.items():
             # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, Calculation):
+            if isinstance(v, orm.CalculationNode):
                 inp_d.pop(k)
         diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
 
         # the dictionary for the inputs to the diffusion workflow, first UPF:
-        lindiff_inp = {k: v for k, v in inp_d.items() if isinstance(v, UpfData)}
+        lindiff_inp = {k: v for k, v in inp_d.items() if isinstance(v, orm.UpfData)}
         lindiff_inp['pseudo_Li'] = lindiff_inp.pop('pseudo_Li_flipper')
 
         # now all the required keywords that have same name as for self:
@@ -442,7 +434,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             coefs = self._get_last_fits(
                 nr_of_calcs=1, diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
             )[0].out.coefficients
-            c, res = update_parameters_with_coefficients_inline(parameters=inp_d['parameters_main'], coefficients=coefs)
+            c, res = update_parameters_with_coefficients(parameters=inp_d['parameters_main'], coefficients=coefs)
             returndict['update_parameters_{}'.format(
                 str(self.ctx.diff_counter
                    ).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
@@ -458,7 +450,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
             diffusion_parameters_d['max_nr_of_replays'
                                   ] = 1  # setting just one replay calculation in the first 2 iterations
             # to reduce total simulation time.
-            lindiff_inp['diffusion_parameters'] = get_or_create_parameters(diffusion_parameters_d, store=True)
+            lindiff_inp['diffusion_parameters'] = get_or_create_input_node(diffusion_parameters_d, store=True)
 
         diff = LindiffusionCalculation(**lindiff_inp)
         diff.label = '{}{}diff-{}'.format(self.label, '-' if self.label else '', self.ctx.diff_counter)
@@ -495,7 +487,7 @@ class ConvergeDiffusionCalculation(ChillstepCalculation):
         returndict['get_configurations_{}'.format(
             str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
         )] = calc
-        pseudos = {k: v for k, v in self.get_inputs_dict().items() if isinstance(v, UpfData)}
+        pseudos = {k: v for k, v in self.get_inputs_dict().items() if isinstance(v, orm.UpfData)}
         fit = FittingFromTrajectoryCalculation(
             structure=self.inp.structure,
             remote_folder_flipper=self.inp.remote_folder,

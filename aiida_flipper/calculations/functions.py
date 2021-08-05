@@ -7,6 +7,7 @@ timeau_to_sec = 2.418884254E-17
 from __future__ import absolute_import
 from aiida import orm
 from aiida.engine import calcfunction
+from aiida_flipper.utils.utils import get_or_create_input_node
 
 from math import ceil as math_ceil
 import numpy as np
@@ -100,6 +101,10 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         parameters_d = parameters.copy()
     else:
         raise TypeError('parameters type not valid')
+    if parameters_d['Decomposed']:
+        decomposed = parameters_d['Decomposed']
+    else:
+        raise TypeError('calculating msd with decomposition not defined')
     for traj in six.itervalues(trajectories):
         if not isinstance(traj, orm.TrajectoryData):
             raise TypeError('trajectories must be TrajectoryData')
@@ -163,7 +168,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     # compute msd
     dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity', 0))
     dynanalyzer.set_trajectories(trajectories)
-    msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, **parameters_d)
+    msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, decomposed=decomposed, **parameters_d)
 
     if plot_and_exit:
         raise NotImplementedError
@@ -176,64 +181,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     for attr, val in msd_iso.get_attrs().items():
         arr_data.set_attribute(attr, val)
 
-    return {'msd_results': arr_data}
-
-
-@calcfunction
-def get_diffusion_decomposed_from_msd(structure, parameters, **trajectories):
-
-    # which module is this?
-    # probably a deprecated function
-    from mdtools.libs.mdlib.trajectory_analysis import TrajectoryAnalyzer 
-
-    parameters_d = parameters.get_dict()
-    trajdata_list = list(trajectories.values())
-
-    ####################### CHECKS ####################
-    units_set = set()
-    timesteps_set = set()
-    for t in trajdata_list:
-        units_set.add(t.get_attr('units|positions'))
-    try:
-        for t in trajdata_list:
-            timesteps_set.add(t.get_attr('timestep_in_fs'))
-    except AttributeError:
-        for t in trajdata_list:
-            input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
-            # get the timestep on the fly
-            timesteps_set.add(
-                timeau_to_sec * 2 * 1e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
-            )
-
-    # Checking if everything is consistent,
-    # Check same units:
-    units_positions = units_set.pop()
-    if units_set:
-        raise Exception('Incommensurate units')
-    # Same timestep is mandatory!
-    timestep_fs = timesteps_set.pop()
-    if timesteps_set:
-        timesteps_set.add(timestep_fs)
-        raise Exception('Multiple timesteps {}'.format(timesteps_set))
-    equilibration_steps = int(parameters_d.get('equilibration_time_fs', 0) / timestep_fs)
-
-    ####################### COMPUTE MSD ####################
-    # TODO: update these lines to use samos DynamicAnalyzer
-    trajectories = [t.get_positions()[equilibration_steps:] for t in trajdata_list]
-    species_of_interest = parameters_d.pop('species_of_interest', None)
-    ta = TrajectoryAnalyzer(verbosity=0)
-    ta.set_structure(structure, species_of_interest=species_of_interest)
-    ta.set_trajectories(trajectories, pos_units=units_positions, timestep_in_fs=timestep_fs, recenter=False)
-    res, arr = ta.get_msd_decomposed(only_means=True, **parameters_d)
-
-    # define MSD-results array
-    arr_data = orm.ArrayData()
-    arr_data.label = '{}-MSD'.format(structure.label)
-    arr_data.set_array('msd_decomposed', arr)
-    arr_data.set_attribute('species_of_interest', species_of_interest)
-    for k, v in res.items():
-        arr_data.set_attribute(k, v)
-    return {'msd_decomposed_results': arr_data}
+    return {'msd_decomposed_results': arr_data} if decomposed else {'msd_results': arr_data}
 
 
 @calcfunction
@@ -366,6 +314,7 @@ def update_parameters_with_coefficients(parameters, coefficients):
     Updates the ParameterData instance passed with the coefficients
     TODO: nonlocal vs local, currently only nonlocal is correclty implemented
     """
+        
     coefs = coefficients.get_attr('coefs')
     parameters_main_d = parameters.get_dict()
     parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
@@ -373,4 +322,4 @@ def update_parameters_with_coefficients(parameters, coefficients):
     parameters_main_d['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
     parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
 
-    return {'updated_parameters': orm.Dict(dict=parameters_main_d)}
+    return {'updated_parameters': get_or_create_input_node(orm.Dict, parameters_main_d, store=True)}
