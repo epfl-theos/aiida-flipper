@@ -14,7 +14,7 @@ from aiida_quantumespresso.utils.mapping import update_mapping, prepare_process_
 #from aiida_quantumespresso.utils.resources import cmdline_remove_npools, create_scheduler_resources
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
-from aiida_flipper.calculations.functions.trajectory import get_structure_from_trajectory, concatenate_trajectory
+from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
 
 #PwCalculation = CalculationFactory('quantumespresso.pw')
 FlipperCalculation = CalculationFactory('quantumespresso.flipper')
