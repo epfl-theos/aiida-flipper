@@ -1,8 +1,8 @@
-from __future__ import absolute_import
 import os
-import numpy as np
 import six
 from six.moves import zip
+import numpy as np
+
 from aiida import orm
 from aiida.common import exceptions
 from aiida.common.lang import classproperty

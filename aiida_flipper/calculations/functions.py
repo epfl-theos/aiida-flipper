@@ -4,7 +4,6 @@ from aiida.engine import calcfunction
 bohr_to_ang = 0.52917720859
 timeau_to_sec = 2.418884254E-17
 
-from __future__ import absolute_import
 from aiida import orm
 from aiida.engine import calcfunction
 from aiida_flipper.utils.utils import get_or_create_input_node

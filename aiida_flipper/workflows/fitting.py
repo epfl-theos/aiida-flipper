@@ -1,5 +1,3 @@
-from __future__ import absolute_import
-from __future__ import print_function
 from abc import abstractmethod
 from aiida.orm import Data, load_node, Calculation, CalculationFactory, Group
 from aiida.orm.calculation.chillstep import ChillstepCalculation

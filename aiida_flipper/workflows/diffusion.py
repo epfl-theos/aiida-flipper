@@ -1,92 +1,97 @@
-from __future__ import absolute_import
-from __future__ import print_function
 from aiida.common.links import LinkType
-from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
-from aiida_flipper.workflows.replaymd import ReplayMDWorkchain
+from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
+from aiida_flipper.workflows.replaymd import ReplayMDWorkChain
 from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
 from aiida_flipper.utils.utils import get_or_create_input_node
 import six
 from six.moves import range
 
-class LindiffusionCalculation(PwBaseWorkchain):
+class LindiffusionCalculation(BaseRestartWorkChain):
 
-    def _get_last_calc(self, diffusion_parameters_d=None):
-        if diffusion_parameters_d is None:
-            diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
-        return getattr(
-            self.out, 'replay_{}'.format(
-                str(self.ctx.replay_counter - 1).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0))
-            )
-        )
-
-    def start(self):
-        # Now, I start by checking that I have all the parameters I need
-        # Don't need to check to much because the BranchingCalculations will validate
-        # most of the parameters!
-        inp_d = self.get_inputs_dict()
-
-        for k, v in inp_d.items():
-            # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, orm.CalculationNode):
-                inp_d.pop(k)
-        # parameters_branching_d = inp_d.pop('parameters_branching').get_dict()
-        # assert isinstance(parameters_branching_d['nr_of_branches'], int)
-        inp_d.pop('moldyn_parameters_main')
-        parameters_main = inp_d.pop('parameters_main').get_dict()
+    @classmethod
+    def define(cls, spec):
+        """Define the process specification."""
+        
+        super().define(spec)
+        
+        spec.input('max_iterations', valid_type=orm.Int, default=lambda: orm.Int(5),
+            help='Maximum number of iterations the work chain will restart the process to finish successfully.')
+        spec.input('thermalize', valid_type=orm.Bool, default=lambda: orm.Bool(True),
+            help='If `True`, it will start the thermalisation step.')
+        spec.input('diffusion_parameters_d',
+            valid_type=orm.Dict, required=True, validator=functools.partial(validate_handler_overrides, cls),
+            help='The dictionary containing all the main parameters.')
+        
+        # I don't understand when or how these error codes would show since I didn't define the error condition
+        spec.exit_code(701, 'ERROR_MAXIMUM_STEPS_NOT_REACHED',
+            message='The calculation failed before reaching the maximum no. of MD steps.')
+        spec.exit_code(702, 'ERROR_DIFFUSION_NOT_CONVERGED',
+            message='The calculation reached the maximum no. of MD steps, but the diffusion coefficient stil did not converge.')
+        
+    def setup(self):
+        """Call the `setup` of the `BaseRestartWorkChain` and then create the inputs dictionary in `self.ctx.inputs`.
+        This `self.ctx.inputs` dictionary will be used by the `BaseRestartWorkChain` to submit the calculations in the
+        internal loop.
+        """
+        super().setup()
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, 'md')) # should I keep it 'pw' instead of 'md'?
+        self.ctx.inputs.pop('moldyn_parameters_main')
+        parameters_main = self.ctx.inputs.pop('parameters_main').get_dict()
         assert parameters_main['IONS']['ion_velocities'] == 'from_input'
 
         try:
-            inp_d.pop('moldyn_parameters_thermalize')
-            inp_d.pop('parameters_thermalize')
             self.ctx.thermalize = True
             self.goto(self.thermalize)
         except KeyError:
             self.ctx.thermalize = False
             self.goto(self.run_replays)
 
-        structure = inp_d.pop('structure')
+        structure = self.ctx.inputs.pop('structure')
         for kind in structure.kinds:
-            inp_d.pop('pseudo_{}'.format(kind.name))
+            self.ctx.inputs.pop('pseudo_{}'.format(kind.name))
 
-        # The code label has to be set as an attribute, and can be changed during the dynamics
-        Code.get_from_string(self.ctx.code_string)
-        self.ctx.num_machines
-        self.ctx.walltime_seconds
 
         for kw in ('kpoints', 'msd_parameters', 'diffusion_parameters'):
             try:
-                inp_d.pop(kw)
+                self.ctx.inputs.pop(kw)
             except KeyError:
                 raise KeyError('Key {} is not present in inputs')
         for optkw in ('settings', 'remote_folder'):
-            inp_d.pop(optkw, None)
+            self.ctx.inputs.pop(optkw, None)
 
-        if inp_d:
-            raise Exception('More keywords provided than needed: {}'.format(list(inp_d.keys())))
+        if self.ctx.inputs:
+            raise Exception('More keywords provided than needed: {}'.format(list(self.ctx.inputs.keys())))
 
         # The counter counts how many REPLAYS I launched
         self.ctx.replay_counter = 0
-
+        
+    def _get_last_calc(self, diffusion_parameters_d=None):
+        if diffusion_parameters_d is None:
+            diffusion_parameters_d = self.ctx.inputs.diffusion_parameters.get_dict()
+        return get_attribute(self.out, 'replay_{}'.format(str(self.ctx.replay_counter - 1).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0))))
+    
     def thermalize(self):
         """
         Thermalize a run! This is the first set of calculations, I thermalize with the criterion
         being the number of steps set in moldyn_parameters_thermalize.dict.nstep
         """
         # all the settings are the same for thermalization, NVE and NVT
-        inp_d = {k: v for k, v in self.get_inputs_dict().items() if not 'parameters_' in k}
-        inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_thermalize
-        inp_d['parameters'] = self.inp.parameters_thermalize
+        inp_d= {k: v for k, v in self.ctx.get_dict().items() if not 'parameters_' in k}
+        inp_d['moldyn_parameters'] = self.ctx.inputs.moldyn_parameters_thermalize
+        inp_d['parameters'] = self.ctx.inputs.parameters_thermalize
         inp_d.pop('diffusion_parameters')
         inp_d.pop('msd_parameters')
         self.goto(self.run_replays)
-        c = ReplayMDWorkchain(**inp_d)
+        c = ReplayMDWorkChain(**inp_d)
         c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
         for attr_key in ('num_machines', 'code_string'):
             c._set_attr(attr_key, self.get_attr(attr_key))
         # for the thermalizer: use the walltime specified in parameters if available
         if not 'max_wallclock_seconds' in inp_d['moldyn_parameters'].get_dict():
-            c._set_attr('walltime_seconds', sel.get_attr('walltime_seconds'))
+            c._set_attr('walltime_seconds', self.ctx.get_attr('walltime_seconds'))
         return {'thermalizer': c}
+    
+#### till here ####
 
     def run_replays(self):
         """
@@ -157,7 +162,7 @@ class LindiffusionCalculation(PwBaseWorkchain):
 #            params_for_calculation_d['IONS']['ion_velocities'] = 'from_input'
 #            inp_d['parameters'] = get_or_create_input_node(params_for_calculation_d, store=True)
 
-        repl = ReplayMDWorkchain(**inp_d)
+        repl = ReplayMDWorkChain(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
             repl._set_attr(attr_key, self.get_attr(attr_key))
@@ -269,7 +274,7 @@ class LindiffusionCalculation(PwBaseWorkchain):
         qb = orm.QueryBuilder()
         qb.append(LindiffusionCalculation, filters={'id': self.id}, tag='ldc')
         qb.append(
-            ReplayMDWorkchain,
+            ReplayMDWorkChain,
             output_of='ldc',
             edge_project='label',
             edge_filters={
@@ -294,7 +299,7 @@ class LindiffusionCalculation(PwBaseWorkchain):
         return {'{}'.format(item['mb']['label']): item['t']['*'] for item in qb.iterdict()}
 
 
-class ConvergeDiffusionCalculation(PwBaseWorkchain):
+class ConvergeDiffusionCalculation(BaseRestartWorkChain):
     _diff_name = 'diff'
     _fit_name = 'fit'
 
@@ -314,7 +319,7 @@ class ConvergeDiffusionCalculation(PwBaseWorkchain):
         res = []
         for idx in range(start, current_counter + 1):
             res.append(
-                getattr(
+                get_attribute(
                     self.out, '{}_{}'.format(
                         link_name,
                         str(idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
