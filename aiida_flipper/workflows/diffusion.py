@@ -6,7 +6,7 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 import six
 from six.moves import range
 
-class LindiffusionCalculation(BaseRestartWorkChain):
+class LindiffusionWorkChain(BaseRestartWorkChain):
 
     @classmethod
     def define(cls, spec):
@@ -299,7 +299,7 @@ class LindiffusionCalculation(BaseRestartWorkChain):
         return {'{}'.format(item['mb']['label']): item['t']['*'] for item in qb.iterdict()}
 
 
-class ConvergeDiffusionCalculation(BaseRestartWorkChain):
+class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
     _diff_name = 'diff'
     _fit_name = 'fit'
 

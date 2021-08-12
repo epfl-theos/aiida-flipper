@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Common utilities."""
+from aiida import orm
 
 def get_or_create_input_node(cls, value, store=True):
     """Return a `Node` of a given class and given value.
@@ -13,7 +14,6 @@ def get_or_create_input_node(cls, value, store=True):
     
     check if we need other datatypes like arraydata
     """
-    from aiida import orm
 
     if cls in (orm.Bool, orm.Float, orm.Int, orm.Str):
 
@@ -88,3 +88,62 @@ def get_or_compute_diffusion_from_msd(calc, msd_parameters, add_to_group_name=No
         return res['msd_results']
     else:
         return None
+    
+def delithiate_structure(structure, element_to_remove='Li'):
+    """
+    Take the input structure and create two structures from it.
+    One structure is "flipper_compatible" whic is essentially the same 
+    structure, just that Li is on first places both in kinds and sites
+    as required for the flipper; the other structure has no Lithium
+    """
+    
+    assert isinstance(structure, orm.StructureData), "input structure needs to be an instance of {}".format(orm.StructureData)
+
+    pinball_kinds = [kind for kind in structure.kinds if kind.symbol == element_to_remove]
+
+    kindnames_to_delithiate = [kind.name for kind in pinball_kinds]
+
+    non_pinball_kinds = [k for i,k in enumerate(structure.kinds) if k.symbol != element_to_remove]
+
+    non_pinball_sites = [s for s in structure.sites if s.kind_name not in kindnames_to_delithiate]
+
+    pinball_sites = [s for s in structure.sites if s.kind_name in kindnames_to_delithiate]
+
+    delithiated_structure = orm.StructureData()
+    pinball_structure = orm.StructureData()
+
+    delithiated_structure.set_cell(structure.cell)
+    delithiated_structure.set_attribute('delithiated', True)
+    pinball_structure.set_cell(structure.cell)
+    pinball_structure.set_attribute('flipper_compatible', True)
+
+    [pinball_structure.append_kind(_) for _ in pinball_kinds]
+    [pinball_structure.append_site(_) for _ in pinball_sites]
+    [pinball_structure.append_kind(_) for _ in non_pinball_kinds]
+    [pinball_structure.append_site(_) for _ in non_pinball_sites]
+
+    [delithiated_structure.append_kind(_) for _ in non_pinball_kinds]
+    [delithiated_structure.append_site(_) for _ in non_pinball_sites]
+
+    delithiated_structure.label = delithiated_structure.get_formula(mode='count')
+    pinball_structure.label = pinball_structure.get_formula(mode='count')
+
+    return pinball_structure, delithiated_structure
+
+def displace_atoms(structure, sigma):
+    """
+    :param structure: A valid StructureData instance
+    :param sigma: The input parameters, an instance of Float, defining the sigma value
+        of the displacement.
+
+    :returns: A structure data instance with shaken positions
+    """
+    
+    import numpy as np
+    assert isinstance(sigma, orm.Float), "input sigma needs to be an instance of {}".format(orm.Float)
+    assert isinstance(structure, orm.StructureData), "input structure needs to be an instance of {}".format(orm.StructureData)
+    atoms = structure.get_ase()
+    atoms.rattle(stdev=sigma.value, seed=np.random.randint(65536))
+    shaken_structure = orm.StructureData(ase=atoms)
+    return shaken_structure
+

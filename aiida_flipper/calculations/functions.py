@@ -16,6 +16,7 @@ from six.moves import zip
 
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
+# Mst probably, this function is not required... 
 @calcfunction
 def remove_lithium_from_structure(structure, parameters):
     parameters_d = parameters.get_dict()
@@ -66,7 +67,8 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
 
     :param structure:  the StructureData node or the ASE of the trajectories
     :param parameters: a ParameterData node or a dictionary containing the parameters for MSD computation. Specifically:
-        equilibration_time_fs
+        equilibration_time_fs, which is the time to assumed to equilibrate the atoms
+        decomposed, which if true, decomposes the MSD into contribution of each atom types
     and all the other samos.DynamicsAnalyzer.get_msd input parameters:
         species_of_interest
         stepsize_t
@@ -100,10 +102,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         parameters_d = parameters.copy()
     else:
         raise TypeError('parameters type not valid')
-    if parameters_d['Decomposed']:
-        decomposed = parameters_d['Decomposed']
-    else:
-        raise TypeError('calculating msd with decomposition not defined')
+
     for traj in six.itervalues(trajectories):
         if not isinstance(traj, orm.TrajectoryData):
             raise TypeError('trajectories must be TrajectoryData')
@@ -113,11 +112,12 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     units_set = set()
     timesteps_set = set()
     for t in trajdata_list:
-        units_set.add(t.get_attr('units|positions'))
+        units_set.add(t.get_attribute('units|positions'))
     try:
         for t in trajdata_list:
-            timesteps_set.add(t.get_attr('timestep_in_fs'))
+            timesteps_set.add(t.get_attribute('timestep_in_fs'))
     except AttributeError:
+        # not really needed, should probably just throw an error if exception
         for t in trajdata_list:
             input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
             # get the timestep on the fly
@@ -126,7 +126,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
             )
 
     # Checking if everything is consistent,
-    # Check same units:
+    # Check same units for each trajectory:
     units_positions = units_set.pop()
     if units_set:
         raise Exception('Incommensurate units')
@@ -152,7 +152,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     for trajdata in trajdata_list:
         positions = pos_conversion * trajdata.get_positions()[equilibration_steps:]
         nat_in_traj = positions.shape[1]
-        trajectory = Trajectory(timestep=t.get_attr('timestep_in_fs'))
+        trajectory = Trajectory(timestep=t.get_attribute('timestep_in_fs'))
         if nat_in_traj != len(atoms):
             indices = [i for i, a in enumerate(atoms.get_chemical_symbols()) if a in species_of_interest]
             if len(indices) == nat_in_traj:
@@ -167,6 +167,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     # compute msd
     dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity', 0))
     dynanalyzer.set_trajectories(trajectories)
+    decomposed = parameters_d.pop('decomposed', 0)
     msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, decomposed=decomposed, **parameters_d)
 
     if plot_and_exit:
@@ -177,7 +178,7 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     arr_data.label = '{}-MSD'.format(structure.label)
     for arrayname in msd_iso.get_arraynames():
         arr_data.set_array(arrayname, msd_iso.get_array(arrayname))
-    for attr, val in msd_iso.get_attrs().items():
+    for attr, val in msd_iso.get_attribute().items():
         arr_data.set_attribute(attr, val)
 
     return {'msd_decomposed_results': arr_data} if decomposed else {'msd_results': arr_data}
