@@ -176,12 +176,15 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     # define MSD-results array
     arr_data = orm.ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
+    # Following are the collection of trajectories, not sure why we need this
     for arrayname in msd_iso.get_arraynames():
         arr_data.set_array(arrayname, msd_iso.get_array(arrayname))
+    # Following attributes are results_dict of samos.analysis.DynamicsAnalyzer.get_msd()
     for attr, val in msd_iso.get_attribute().items():
         arr_data.set_attribute(attr, val)
-
-    return {'msd_decomposed_results': arr_data} if decomposed else {'msd_results': arr_data}
+#     # probably not needed to return based on decomposed keyword
+#     return {'msd_decomposed_results': arr_data} if decomposed else {'msd_results': arr_data}
+    return arr_data
 
 
 @calcfunction

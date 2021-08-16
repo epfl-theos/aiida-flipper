@@ -6,8 +6,9 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 import six
 from six.moves import range
 
-class LindiffusionWorkChain(BaseRestartWorkChain):
+class LinDiffusionWorkChain(BaseRestartWorkChain):
 
+    # need to give 'nstep' as input to ReplayMDWorkChain, when calling it, in run_replays() function
     @classmethod
     def define(cls, spec):
         """Define the process specification."""
@@ -34,7 +35,7 @@ class LindiffusionWorkChain(BaseRestartWorkChain):
         internal loop.
         """
         super().setup()
-        self.ctx.inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, 'md')) # should I keep it 'pw' instead of 'md'?
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, 'md'))
         self.ctx.inputs.pop('moldyn_parameters_main')
         parameters_main = self.ctx.inputs.pop('parameters_main').get_dict()
         assert parameters_main['IONS']['ion_velocities'] == 'from_input'
@@ -204,12 +205,10 @@ class LindiffusionWorkChain(BaseRestartWorkChain):
             #~ print len(self._get_trajectories())
             concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
             # I estimate the diffusion coefficients: without storing
-            msd_results = get_diffusion_from_msd(
-                structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory
-            )['msd_results']
+            msd_results = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
+            # sem is standard error = sigma/sq_root(no.)
             sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
-            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0])
-                                         )['diffusion_mean_cm2_s']
+            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
             sem_relative = sem / mean_d
             sem_target = diffusion_parameters_d['sem_threshold']
             sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
@@ -239,33 +238,27 @@ class LindiffusionWorkChain(BaseRestartWorkChain):
 
     def collect(self):
         msd_parameters = self.inputs.msd_parameters
-        c1, res1 = concatenate_trajectory(**self._get_trajectories())
-        concatenated_trajectory = res1['concatenated_trajectory']
-        c2, res2 = get_diffusion_from_msd(
-            structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory
-        )
+        concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
+        res = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
         try:
             # Maybe I'm supposed to store the result?
+            # This obviously needs to be changed to how currently new nodes are stored and connected to workchains
             g = orm.Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
             g.add_nodes(res2['msd_results'])
         except Exception as e:
             pass
-
-        res2['get_diffusion'] = c2
-        res2['concatenate_trajectory'] = c1
-        res2.update(res1)
         self.goto(self.exit)
         return res2
-
+    
+    # This function is not really needed
     def show_msd_now_nosave(self, **kwargs):
-        from aiida.orm.data.parameter import ParameterData
         msd_parameters_d = self.inputs.msd_parameters.get_dict()
         msd_parameters_d.update(kwargs)
         concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
         # I estimate the diffusion coefficients: without storing
         msd_results = get_diffusion_from_msd(
             structure=self.inputs.structure,
-            parameters=ParameterData(dict=msd_parameters_d),
+            parameters=orm.Dict(dict=msd_parameters_d),
             trajectory=concatenated_trajectory
         )
         return msd_results
@@ -410,10 +403,18 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
         # The replay Counter counts how many REPLAYS I launched
         self.ctx.diff_counter = 0
         self.goto(self.run_estimates)
+        
+    def run_preprocess(self):
+        """
+        Runs the PreProcessStructureWorkChain to stash the charge densities of host lattice.
+        This is the first workchain that this class must run if charge densities are not found
+        """
+        returndict = {}
+        return returndict
 
     def run_estimates(self):
         """
-        Runs an LindiffusionCalculation for an estimate of the diffusion.
+        Runs a LinDiffusionWorkChain for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
         inp_d = self.get_inputs_dict()
