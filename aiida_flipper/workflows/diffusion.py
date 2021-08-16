@@ -64,6 +64,7 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
             raise Exception('More keywords provided than needed: {}'.format(list(self.ctx.inputs.keys())))
 
         # The counter counts how many REPLAYS I launched
+        self.ctx.converged = False
         self.ctx.replay_counter = 0
         
     def _get_last_calc(self, diffusion_parameters_d=None):
@@ -86,13 +87,13 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         c = ReplayMDWorkChain(**inp_d)
         c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
         for attr_key in ('num_machines', 'code_string'):
-            c._set_attr(attr_key, self.get_attr(attr_key))
+            c.set_attribute(attr_key, self.get_attribute(attr_key))
+        if self.get_attr('num_mpiprocs_per_machine', 0):
+            c._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
         # for the thermalizer: use the walltime specified in parameters if available
         if not 'max_wallclock_seconds' in inp_d['moldyn_parameters'].get_dict():
-            c._set_attr('walltime_seconds', self.ctx.get_attr('walltime_seconds'))
+            c.set_attribute('walltime_seconds', self.ctx.get_attribute('walltime_seconds'))
         return {'thermalizer': c}
-    
-#### till here ####
 
     def run_replays(self):
         """
@@ -118,7 +119,7 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
                 last_calc = self.out.thermalizer
                 if self.out.thermalizer.get_state() == 'FAILED':
                     raise Exception('Thermalizer failed')
-                recenter = inp_d['moldyn_parameters'].get_attr('recenter_before_main', False)
+                recenter = inp_d['moldyn_parameters'].get_attribute('recenter_before_main', False)
             else:
                 last_calc = None
         else:
@@ -136,15 +137,12 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         else:
             # if trajectory and structure have different shapes (i.e. for pinball level 1 calculation on pinball positions are printed:)
             create_missing = len(self.inp.structure.sites
-                                ) != last_calc.out.total_trajectory.get_attr('array|positions')[1]
+                                ) != last_calc.out.total_trajectory.get_attribute('array|positions')[1]
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
             kwargs = dict(
                 trajectory=last_calc.out.total_trajectory,
-                parameters=get_or_create_input_node(
-                    dict(step_index=-1, recenter=recenter, create_settings=True, complete_missing=create_missing),
-                    store=True
-                ),
-            )
+                parameters=get_or_create_input_node(orm.Dict,
+                    dict(step_index=-1, recenter=recenter, create_settings=True, complete_missing=create_missing), store=True),)
             if create_missing:
                 kwargs['structure'] = self.inp.structure
             try:
@@ -166,10 +164,10 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         repl = ReplayMDWorkChain(**inp_d)
         repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
-            repl._set_attr(attr_key, self.get_attr(attr_key))
-        returnval['replay_{}'.format(
-            str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0))
-        )] = repl
+            repl.set_attribute(attr_key, self.get_attribute(attr_key))
+        if self.get_attribute('num_mpiprocs_per_machine', 0):
+            repl.set_attribute('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
+        returnval['replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0)))] = repl
 
         # Last thing I do is set up the counter:
         self.goto(self.check)
@@ -183,7 +181,7 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         minimum_nr_of_replays = diffusion_parameters_d.get('min_nr_of_replays', 0)
         lastcalc = self._get_last_calc(diffusion_parameters_d=diffusion_parameters_d)
         if lastcalc.get_state() == 'FAILED':
-            raise Exception('Last replay {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attr('fail_msg')))
+            raise Exception('Last replay {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attribute('fail_msg')))
 
         try:
             user_wants_termination = self.ctx.force_termination
@@ -207,8 +205,8 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
             # I estimate the diffusion coefficients: without storing
             msd_results = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
             # sem is standard error = sigma/sq_root(no.)
-            sem = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
-            mean_d = msd_results.get_attr('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
+            sem = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
+            mean_d = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
             sem_relative = sem / mean_d
             sem_target = diffusion_parameters_d['sem_threshold']
             sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
@@ -221,14 +219,12 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
             elif (sem < sem_target):
                 # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
                 print('The error ( {} ) is below the target value ( {} )'.format(sem, sem_target))
+                self.ctx.converged = True
                 self.goto(self.collect)
             elif (sem_relative < sem_relative_target):
                 # the relative error is below my targe value
-                print(
-                    'The relative error ( {} ) is below the target value ( {} )'.format(
-                        sem_relative, sem_relative_target
-                    )
-                )
+                print('The relative error ( {} ) is below the target value ( {} )'.format(sem_relative, sem_relative_target))
+                self.ctx.converged = True
                 self.goto(self.collect)
             else:
                 print('The error has not converged')
@@ -265,7 +261,7 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
 
     def _get_trajectories(self):
         qb = orm.QueryBuilder()
-        qb.append(LindiffusionCalculation, filters={'id': self.id}, tag='ldc')
+        qb.append(LinDiffusionWorkChain, filters={'id': self.id}, tag='ldc')
         qb.append(
             ReplayMDWorkChain,
             output_of='ldc',
@@ -311,29 +307,16 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
                 raise ValueError('You asked for more calculations than there are')
         res = []
         for idx in range(start, current_counter + 1):
-            res.append(
-                get_attribute(
-                    self.out, '{}_{}'.format(
-                        link_name,
-                        str(idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
-                    )
-                )
-            )
+            res.append(get_attribute(self.out, '{}_{}'.format(link_name, str(idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))))
         return res
 
     def _get_last_diffs(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
-        return self._get_last_calcs(
-            self._diff_name,
-            nr_of_calcs=nr_of_calcs,
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
-        )
+        return self._get_last_calcs(self._diff_name, nr_of_calcs=nr_of_calcs,
+            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
 
     def _get_last_fits(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
-        return self._get_last_calcs(
-            self._fit_name,
-            nr_of_calcs=nr_of_calcs,
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
-        )
+        return self._get_last_calcs(self._fit_name, nr_of_calcs=nr_of_calcs,
+            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
 
     def start(self):
         # Now, I start by checking that I have all the parameters I need
@@ -355,16 +338,13 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
         self.ctx.num_machines
         self.ctx.walltime_seconds
 
-        for required_kw in (
-            'moldyn_parameters_main', 'parameters_main', 'msd_parameters', 'diffusion_parameters', 'parameters_fitting',
-            'parameters_fitting_dft', 'parameters_fitting_flipper', 'structure_fitting_parameters', 'hustler_code',
-            'kpoints'
-        ):
+        for required_kw in ('moldyn_parameters_main', 'parameters_main', 'msd_parameters', 'diffusion_parameters', 'parameters_fitting',
+            'parameters_fitting_dft', 'parameters_fitting_flipper', 'structure_fitting_parameters', 'hustler_code', 'kpoints'):
             if required_kw not in inp_d:
                 raise KeyError('Input requires value with keyword {}'.format(required_kw))
             inp_d.pop(required_kw)
 
-        for optional_kw in ('remote_folder', 'settings', 'moldyn_parameters_thermalize', 'parameters_thermalize'):
+        for optional_kw in ('remote_folder', 'settings', 'moldyn_parameters_thermalize', 'parameters_thermalize'): ## these are not supported yet
             inp_d.pop(optional_kw, None)
 
         diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
@@ -391,18 +371,24 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             if key not in diffusion_convergence_parameters_d:
                 raise KeyError('Key {} has to be in diffusion convergence parameters')
             if not isinstance(diffusion_convergence_parameters_d[key], typ):
-                raise TypeError(
-                    'Key {} has the wrong type ({} {}) as value'.format(
-                        key, diffusion_convergence_parameters_d[key], type(diffusion_convergence_parameters_d[key])
-                    )
-                )
+                raise TypeError('Key {} has the wrong type ({} {}) as value'.format(key, diffusion_convergence_parameters_d[key], type(diffusion_convergence_parameters_d[key])))
 
         if inp_d:
             raise Exception('More keywords provided than needed: {}'.format(list(inp_d.keys())))
 
         # The replay Counter counts how many REPLAYS I launched
         self.ctx.diff_counter = 0
+        self.ctx.converged = False
         self.goto(self.run_estimates)
+        # check if we should start by performing a fit over an old trajectory
+        try:
+            first_fit_trajectory = self.inp.first_fit_trajectory
+        except AttributeError:
+            first_fit_trajectory = None
+        if first_fit_trajectory:
+            self.goto(self.run_fit)
+        else:
+            self.goto(self.run_estimates)
         
     def run_preprocess(self):
         """
@@ -458,10 +444,12 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             # to reduce total simulation time.
             lindiff_inp['diffusion_parameters'] = get_or_create_input_node(diffusion_parameters_d, store=True)
 
-        diff = LindiffusionCalculation(**lindiff_inp)
+        diff = LinDiffusionWorkChain(**lindiff_inp)
         diff.label = '{}{}diff-{}'.format(self.label, '-' if self.label else '', self.ctx.diff_counter)
         for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
-            diff._set_attr(attr_key, self.get_attr(attr_key))
+            diff.set_attribute(attr_key, self.get_attribute(attr_key))
+        if self.get_attr('num_mpiprocs_per_machine', 0):
+            diff._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
 
         self.goto(self.check)
         self.ctx.diff_counter += 1
@@ -478,9 +466,17 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
         from .fitting import get_configurations_from_trajectories_inline, FittingFromTrajectoryCalculation
 
         diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
-        lastcalc = self._get_last_diffs(
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1
-        )[0]
+        
+        # if first_fit_trajectory was specified, use it to perform an initial fit
+        try:
+            first_fit_trajectory = self.inp.first_fit_trajectory
+        except AttributeError:
+            first_fit_trajectory = None
+        if self.ctx.diff_counter == 0 and first_fit_trajectory:
+            trajectory = first_fit_trajectory
+        else:
+            lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1)[0]
+            trajectory = lastcalc.out.concatenated_trajectory
 
         # Since I have not converged I need to run another fit calculation:
         returndict = {}
@@ -488,11 +484,8 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
         calc, res = get_configurations_from_trajectories_inline(
             parameters=self.inp.structure_fitting_parameters,
             structure=self.inp.structure,
-            trajectory=lastcalc.out.concatenated_trajectory
-        )
-        returndict['get_configurations_{}'.format(
-            str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
-        )] = calc
+            trajectory=lastcalc.out.concatenated_trajectory)
+        returndict['get_configurations_{}'.format(str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))] = calc
         pseudos = {k: v for k, v in self.get_inputs_dict().items() if isinstance(v, orm.UpfData)}
         fit = FittingFromTrajectoryCalculation(
             structure=self.inp.structure,
@@ -506,26 +499,21 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             settings=self.inp.settings,
             **pseudos
         )
-        returndict['{}_{}'.format(
-            self._fit_name,
-            str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
-        )] = fit
+        returndict['{}_{}'.format(self._fit_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))] = fit
         self.goto(self.run_estimates)
         return returndict
 
     def check(self):
         import numpy as np
         diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
-        lastcalc = self._get_last_diffs(
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1
-        )[0]
+        lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1)[0]
 
         if diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
             print('Cannot run more')
             self.goto(self.collect)
         elif lastcalc.get_state() == 'FAILED':
             raise Exception(
-                'Last diffusion {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attr('fail_msg'))
+                'Last diffusion {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attribute('fail_msg'))
             )
 
         elif diffusion_convergence_parameters_d['min_iterations'] > self.ctx.diff_counter:
@@ -537,16 +525,20 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             # see whether I converged or need to run again:
             # Now let me see the diffusion coefficient that I get and if it's converged
             # I consider it converged if the last 3 estimates have not changed more than the threshold
-            last_diff_calculations = self._get_last_diffs(
-                diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=3
-            )
+            # In case min_iterations == 2, I just use the last 2 calculations
+            if diffusion_convergence_parameters_d['min_iterations'] == 2:
+                last_diff_calculations = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=2)
+            else:
+                last_diff_calculations = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=3)
 
             diffusions = np.array([
-                calc.out.msd_results.get_attr(diffusion_convergence_parameters_d['species'])['diffusion_mean_cm2_s']
+                calc.out.msd_results.get_attribute(diffusion_convergence_parameters_d['species'])['diffusion_mean_cm2_s']
                 for calc in last_diff_calculations
             ])
             if diffusions.std() < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
                 # all good, I have converged!
+                print 'Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s'])
+                self.ctx.converged = True
                 self.goto(self.collect)
             elif (
                 'diffusion_thr_cm2_s_rel' in diffusion_convergence_parameters_d and
@@ -555,6 +547,8 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
                    ) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel']
             ):
                 # Checked relative convergence by dividing the standard deviation by the mean
+                print 'Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s'])
+                self.ctx.converged = True
                 self.got(self.collect)
             else:
                 self.goto(self.run_fit)

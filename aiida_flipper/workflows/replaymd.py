@@ -48,7 +48,7 @@ def get_total_trajectory(workchain, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
-        res, calc = concatenate_trajectory.run_get_node(**traj_d)
+        res, calc = concatenate_trajectory.run_get_node(**traj_d) # check if this function is used correctly
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
         # no reason to concatenate if I have only one trajectory (saves space in repository)
