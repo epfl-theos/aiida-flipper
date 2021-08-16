@@ -17,30 +17,22 @@
     "python_requires": ">=3.6",
     "install_requires": [
         "aiida_core[atomic_tools]>=1.2",
-        "samos>=0.3.1"
+        "samos>=0.2.0"
     ],
     "entry_points": {
         "aiida.calculations": [
             "quantumespresso.flipper = aiida_flipper.calculations.flipper:FlipperCalculation",
             "quantumespresso.pes = aiida_flipper.calculations.pes:PesCalculation",
-            "quantumespresso.hustler = aiida_flipper.calculations.hustler:HustlerCalculation",
-            "chillstep.branching=aiida_flipper.calculations.branching.BranchingCalculation",
-            "chillstep.moldyn=aiida_flipper.calculations.moldyn.MoldynCalculation"
+            "quantumespresso.hustler = aiida_flipper.calculations.hustler:HustlerCalculation"
          ],
         "aiida.parsers": [
             "quantumespresso.flipper = aiida_flipper.parsers.flipper:FlipperParser",
             "quantumespresso.pes = aiida_flipper.parsers.pes:PesParser"
         ],
         "aiida.workflows": [
-            "quantumespresso.flipper.replaymd = aiida_flipper.workflows.replaymd:ReplayMdWorkChain"
-        ]
-    },
-    "extras_require": {
-        "pre-commit": [
-            "pre-commit>=1.18.3",
-            "yapf>=0.28.0",
-            "prospector>=1.2.0",
-            "pylint>=2.4.4"
+            "quantumespresso.flipper.replaymd = aiida_flipper.workflows.replaymd:ReplayMDWorkChain",
+            "quantumespresso.flipper.lindiffusion = aiida_flipper.workflows.diffusion:LinDiffusionWorkChain",
+            "quantumespresso.flipper.convergediffusion = aiida_flipper.workflows.diffusion:ConvergeDiffusionWorkChain"
         ]
     }
 }

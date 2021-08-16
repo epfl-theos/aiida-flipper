@@ -12,7 +12,7 @@ from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 class PesCalculation(PwCalculation):
 
-        _PES_FILE = 'potential.xsf'  #hardcoded into pinball version!
+    _PES_FILE = 'potential.xsf'  #hardcoded into pinball version!
 
     @classmethod
     def define(cls, spec):

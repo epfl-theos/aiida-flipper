@@ -537,7 +537,7 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             ])
             if diffusions.std() < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
                 # all good, I have converged!
-                print 'Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s'])
+                print('Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s']))
                 self.ctx.converged = True
                 self.goto(self.collect)
             elif (
@@ -547,7 +547,7 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
                    ) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel']
             ):
                 # Checked relative convergence by dividing the standard deviation by the mean
-                print 'Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s'])
+                print('Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s']))
                 self.ctx.converged = True
                 self.got(self.collect)
             else:

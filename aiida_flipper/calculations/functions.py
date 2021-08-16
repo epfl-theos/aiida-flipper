@@ -17,7 +17,7 @@ from six.moves import zip
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
 @calcfunction
-def delithiate_structure(structure, element_to_remove='Li'):
+def delithiate_structure(structure, element_to_remove=orm.Str('Li')):
     """
     Take the input structure and create two structures from it.
     One structure is "flipper_compatible" which is essentially the same 
@@ -54,9 +54,11 @@ def delithiate_structure(structure, element_to_remove='Li'):
     [delithiated_structure.append_site(_) for _ in non_pinball_sites]
 
     delithiated_structure.label = delithiated_structure.get_formula(mode='count')
+    delithiated_structure.set_extras('delithiated_structure', True)
     pinball_structure.label = pinball_structure.get_formula(mode='count')
+    pinball_structure.set_extras('pinball_structure', True)
 
-    return pinball_structure, delithiated_structure
+    return dict(pinball_structure=pinball_structure, delithiated_structure=delithiated_structure)
 
 
 @calcfunction
