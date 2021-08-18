@@ -54,9 +54,9 @@ def delithiate_structure(structure, element_to_remove=orm.Str('Li')):
     [delithiated_structure.append_site(_) for _ in non_pinball_sites]
 
     delithiated_structure.label = delithiated_structure.get_formula(mode='count')
-    delithiated_structure.set_extras('delithiated_structure', True)
+    delithiated_structure.set_extra('delithiated_structure', True)
     pinball_structure.label = pinball_structure.get_formula(mode='count')
-    pinball_structure.set_extras('pinball_structure', True)
+    pinball_structure.set_extra('pinball_structure', True)
 
     return dict(pinball_structure=pinball_structure, delithiated_structure=delithiated_structure)
 

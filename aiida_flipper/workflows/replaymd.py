@@ -25,7 +25,7 @@ def get_completed_number_of_steps(calc):
     """Read the number of steps from the trajectory."""
     try:
         traj = calc.outputs.output_trajectory
-    except NotExistent:
+    except exceptions.NotExistent:
         raise Exception('Output trajectory not found.')
     nstep = calc.inputs.parameters.get_attribute('CONTROL').get('iprint', 1) * \
                 (traj.get_attribute('array|positions')[0] - 1)  # the zeroth step is also saved
@@ -138,7 +138,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             cls.validate_parameters,
             cls.validate_kpoints,
             cls.validate_pseudos,
-            cls.validate_resources,
+            # cls.validate_resources,
             #if_(cls.should_run_init)(
             #    cls.validate_init_inputs,
             #    cls.run_init,
@@ -339,7 +339,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             #self.ctx.inputs.pop('parent_folder', None)
 
         self.ctx.inputs.parameters['CONTROL']['nstep'] = self.ctx.mdsteps_todo
-        self.ctx.inputs.metadata['label'] = '{}_{:02d}'.format(self.inputs.metadata.label, self.ctx.iteration + 1)
+        self.ctx.inputs.metadata['label'] = str(self.ctx.iteration + 1)
         self.ctx.has_initial_velocities = False
 
         ## if this is not flipper MD

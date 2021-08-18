@@ -1,5 +1,9 @@
+from aiida import orm
+import functools
 from aiida.common.links import LinkType
-from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
+from aiida.common import AttributeDict
+from aiida.engine import ToContext, append_, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
+from aiida.engine.processes.workchains.restart import validate_handler_overrides
 from aiida_flipper.workflows.replaymd import ReplayMDWorkChain
 from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
 from aiida_flipper.utils.utils import get_or_create_input_node
@@ -8,22 +12,25 @@ from six.moves import range
 
 class LinDiffusionWorkChain(BaseRestartWorkChain):
 
-    # need to give 'nstep' as input to ReplayMDWorkChain, when calling it, in run_replays() function
     @classmethod
     def define(cls, spec):
         """Define the process specification."""
-        
         super().define(spec)
         
-        spec.input('max_iterations', valid_type=orm.Int, default=lambda: orm.Int(5),
-            help='Maximum number of iterations the work chain will restart the process to finish successfully.')
-        spec.input('thermalize', valid_type=orm.Bool, default=lambda: orm.Bool(True),
-            help='If `True`, it will start the thermalisation step.')
-        spec.input('diffusion_parameters_d',
+        spec.input('diffusion_parameters',
             valid_type=orm.Dict, required=True, validator=functools.partial(validate_handler_overrides, cls),
             help='The dictionary containing all the main parameters.')
         
-        # I don't understand when or how these error codes would show since I didn't define the error condition
+        spec.outline(
+            cls.setup,
+            cls.validate_parameters,
+            while_(cls.should_run_process)(
+                cls.run_process,
+                cls.inspect_process,
+            ),
+            cls.results,)
+        
+        # When or how these error codes would show since I didn't define the error condition
         spec.exit_code(701, 'ERROR_MAXIMUM_STEPS_NOT_REACHED',
             message='The calculation failed before reaching the maximum no. of MD steps.')
         spec.exit_code(702, 'ERROR_DIFFUSION_NOT_CONVERGED',
@@ -36,21 +43,18 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         """
         super().setup()
         self.ctx.inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, 'md'))
-        self.ctx.inputs.pop('moldyn_parameters_main')
+        # The counter counts how many REPLAYS I launched
+        self.ctx.converged = False
+        self.ctx.replay_counter = 0
+
+    def validate_parameters(self):
+        """Validate inputs that might depend on each other and cannot be validated by the spec.
+
+        Also define dictionary `inputs` in the context, that will contain the inputs for the calculation that will be
+        launched in the `run_calculation` step.
+        """
         parameters_main = self.ctx.inputs.pop('parameters_main').get_dict()
         assert parameters_main['IONS']['ion_velocities'] == 'from_input'
-
-        try:
-            self.ctx.thermalize = True
-            self.goto(self.thermalize)
-        except KeyError:
-            self.ctx.thermalize = False
-            self.goto(self.run_replays)
-
-        structure = self.ctx.inputs.pop('structure')
-        for kind in structure.kinds:
-            self.ctx.inputs.pop('pseudo_{}'.format(kind.name))
-
 
         for kw in ('kpoints', 'msd_parameters', 'diffusion_parameters'):
             try:
@@ -63,74 +67,37 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
         if self.ctx.inputs:
             raise Exception('More keywords provided than needed: {}'.format(list(self.ctx.inputs.keys())))
 
-        # The counter counts how many REPLAYS I launched
-        self.ctx.converged = False
-        self.ctx.replay_counter = 0
-        
+    def should_run_process(self):
+        """Return whether a new process should be run.
+
+        This is the case as long as the last process has not finished successfully, the maximum number of restarts has
+        not yet been exceeded, and the number of maximum replays has not been reached or diffusion coefficient converged.
+        """
+        return not(self.ctx.is_finished) and (self.ctx.iteration < self.inputs.max_iterations.value) and (
+            (self.ctx.converged) or (self.inp.diffusion_parameters.get_dict()['max_nr_of_replays'] <= self.ctx.replay_counter))
+
     def _get_last_calc(self, diffusion_parameters_d=None):
+        # This function needs to be defined again, maybe as a query? Probably don't even need this now 
         if diffusion_parameters_d is None:
             diffusion_parameters_d = self.ctx.inputs.diffusion_parameters.get_dict()
         return get_attribute(self.out, 'replay_{}'.format(str(self.ctx.replay_counter - 1).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0))))
-    
-    def thermalize(self):
-        """
-        Thermalize a run! This is the first set of calculations, I thermalize with the criterion
-        being the number of steps set in moldyn_parameters_thermalize.dict.nstep
-        """
-        # all the settings are the same for thermalization, NVE and NVT
-        inp_d= {k: v for k, v in self.ctx.get_dict().items() if not 'parameters_' in k}
-        inp_d['moldyn_parameters'] = self.ctx.inputs.moldyn_parameters_thermalize
-        inp_d['parameters'] = self.ctx.inputs.parameters_thermalize
-        inp_d.pop('diffusion_parameters')
-        inp_d.pop('msd_parameters')
-        self.goto(self.run_replays)
-        c = ReplayMDWorkChain(**inp_d)
-        c.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
-        for attr_key in ('num_machines', 'code_string'):
-            c.set_attribute(attr_key, self.get_attribute(attr_key))
-        if self.get_attr('num_mpiprocs_per_machine', 0):
-            c._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
-        # for the thermalizer: use the walltime specified in parameters if available
-        if not 'max_wallclock_seconds' in inp_d['moldyn_parameters'].get_dict():
-            c.set_attribute('walltime_seconds', self.ctx.get_attribute('walltime_seconds'))
-        return {'thermalizer': c}
 
-    def run_replays(self):
+    def run_process(self):
         """
-        Here I restart from the the thermalized run! I run NVT until I have reached the
+        Here I restart from the thermalized run! I run NVT until I have reached the
         number of steps specified in self.inp.moldyn_parameters_NVT.dict.nstep
+        First run is always run with thermalized label.
         """
-        # Transfer all the inputs to the subworkflow, without stuff that is paramaters-annotated:
-        diffusion_parameters_d = self.inp.diffusion_parameters.get_dict()
-        inp_d = {k: v for k, v in self.get_inputs_dict().items() if not 'parameters' in k}
-        # These are the right parameters:
-
-        #~ moldyn_params_d = self.inp.moldyn_parameters_main.get_dict()
-        #~ moldyn_params_d['max_wallclock_seconds'] = self.ctx.walltime_seconds
-        #~ moldyn_params_d['resources'] = {'num_machines':self.ctx.num_machines}
-        inp_d['moldyn_parameters'] = self.inp.moldyn_parameters_main
-        #~ inp_d['code'] = Code.get_from_string(self.ctx.code_string)
-        inp_d['parameters'] = self.inp.parameters_main
+        super().run_process()
+        ## dont think this block is useful
+        '''
         returnval = {}
-
-        # Now I'm checking whether I am starting this
         if (self.ctx.replay_counter == 0):
-            if self.ctx.thermalize:
-                last_calc = self.out.thermalizer
-                if self.out.thermalizer.get_state() == 'FAILED':
-                    raise Exception('Thermalizer failed')
-                recenter = inp_d['moldyn_parameters'].get_attribute('recenter_before_main', False)
-            else:
-                last_calc = None
+            recenter = inp_d['moldyn_parameters'].get_attr('recenter_before_main', False)
         else:
-            last_calc = self._get_last_calc(diffusion_parameters_d)
-            if last_calc.get_state() == 'FAILED':
-                raise Exception('Last calculation {} failed'.format(last_calc))
-            elif last_calc.get_state() != 'FINISHED':
-                raise Exception('Last calculation {} is in state {}'.format(last_calc.get_state()))
-                traj = self.out.thermalizer.out.total_trajectory
             recenter = False
 
+        last_calc = self._get_last_calc(diffusion_parameters_d)
         if last_calc is None:
             inp_d['structure'] = self.inp.structure
             inp_d['settings'] = self.inp.settings
@@ -154,137 +121,70 @@ class LinDiffusionWorkChain(BaseRestartWorkChain):
             returnval['get_structure'] = inlinec
             inp_d['settings'] = res['settings']
             inp_d['structure'] = res['structure']
+        '''
+        diffusion_parameters_d = self.inp.diffusion_parameters.get_dict()
+        repl = ReplayMDWorkChain(**diffusion_parameters_d)
+        if (self.ctx.replay_counter == 0): 
+            repl.label = '{}{}thermalize'.format(self.label, '-' if self.label else '')
+        else:
+            repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
+        
+        # returnval['replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0)))] = repl
 
-
-#            # I have to set the parameters so that they read from input!
-#            params_for_calculation_d = inp_d['parameters'].get_dict()
-#            params_for_calculation_d['IONS']['ion_velocities'] = 'from_input'
-#            inp_d['parameters'] = get_or_create_input_node(params_for_calculation_d, store=True)
-
-        repl = ReplayMDWorkChain(**inp_d)
-        repl.label = '{}{}replay-{}'.format(self.label, '-' if self.label else '', self.ctx.replay_counter)
-        for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
-            repl.set_attribute(attr_key, self.get_attribute(attr_key))
-        if self.get_attribute('num_mpiprocs_per_machine', 0):
-            repl.set_attribute('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
-        returnval['replay_{}'.format(str(self.ctx.replay_counter).rjust(len(str(diffusion_parameters_d['max_nr_of_replays'])), str(0)))] = repl
-
-        # Last thing I do is set up the counter:
-        self.goto(self.check)
+        self.ctx.is_finished = False
         self.ctx.replay_counter += 1
-        return returnval
 
-    def check(self):
+        return ToContext(children=append_(node))
+
+    def inspect_process(self):
+
+        super().inspect_process()
 
         diffusion_parameters_d = self.inp.diffusion_parameters.get_dict()
         msd_parameters = self.inp.msd_parameters
-        minimum_nr_of_replays = diffusion_parameters_d.get('min_nr_of_replays', 0)
-        lastcalc = self._get_last_calc(diffusion_parameters_d=diffusion_parameters_d)
-        if lastcalc.get_state() == 'FAILED':
-            raise Exception('Last replay {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attribute('fail_msg')))
 
-        try:
-            user_wants_termination = self.ctx.force_termination
-        except AttributeError:
-            user_wants_termination = False
-
-        if user_wants_termination:
-            print('User wishes termination')
-            self.goto(self.collect)
-        elif (minimum_nr_of_replays > self.ctx.replay_counter):
-            # I don't even care, I just launch the next!
-            print('Did not run enough')
+        concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
+        # Estimate the diffusion coefficients without storing, to check convergence
+        msd_results = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
+        # sem is standard error = sigma/sq_root(no.)
+        sem = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
+        mean_d = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
+        sem_relative = sem / mean_d
+        sem_target = diffusion_parameters_d['sem_threshold']
+        sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
+        if (mean_d < 0.):
+            # the diffusion is negative: means that the value is not converged enough yet
+            self.report('The Diffusion coefficient ( {} +/- {} ) is negative, i.e. not converged.'.format(mean_d, sem))
             self.goto(self.run_replays)
-        elif (diffusion_parameters_d['max_nr_of_replays'] <= self.ctx.replay_counter):
-            print('Cannot run more')
-            self.goto(self.collect)
+        elif (sem < sem_target):
+            # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
+            self.report('Converged! The error ( {} ) is below the target value ( {} )'.format(sem, sem_target))
+            self.ctx.converged = True
+        elif (sem_relative < sem_relative_target):
+            # the relative error is below my targe value
+            self.report('Converged! The relative error ( {} ) is below the target value ( {} )'.format(sem_relative, sem_relative_target))
+            self.ctx.converged = True
         else:
-            # Now let me calculate the diffusion coefficient that I get:
-            #~ print len(self._get_trajectories())
-            concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
-            # I estimate the diffusion coefficients: without storing
-            msd_results = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
-            # sem is standard error = sigma/sq_root(no.)
-            sem = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_sem_cm2_s']
-            mean_d = msd_results.get_attribute('{}'.format(msd_parameters.dict.species_of_interest[0]))['diffusion_mean_cm2_s']
-            sem_relative = sem / mean_d
-            sem_target = diffusion_parameters_d['sem_threshold']
-            sem_relative_target = diffusion_parameters_d['sem_relative_threshold']
-            print(mean_d, sem / mean_d, sem)
-            #~ return
-            if (mean_d < 0.):
-                # the diffusion is negative: means that the value is not converged enough yet
-                print('The Diffusion coefficient ( {} +/- {} ) is negative, i.e. not converged.'.format(mean_d, sem))
-                self.goto(self.run_replays)
-            elif (sem < sem_target):
-                # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
-                print('The error ( {} ) is below the target value ( {} )'.format(sem, sem_target))
-                self.ctx.converged = True
-                self.goto(self.collect)
-            elif (sem_relative < sem_relative_target):
-                # the relative error is below my targe value
-                print('The relative error ( {} ) is below the target value ( {} )'.format(sem_relative, sem_relative_target))
-                self.ctx.converged = True
-                self.goto(self.collect)
-            else:
-                print('The error has not converged')
-                print('absolute sem: {:.5e}  Target: {:.5e}'.format(sem, sem_target))
-                print('relative sem: {:.5e}  Target: {:.5e}'.format(sem_relative, sem_relative_target))
-                self.goto(self.run_replays)
+            self.report('The error has not converged')
+            self.report('absolute sem: {:.5e}  Target: {:.5e}'.format(sem, sem_target))
+            self.report('relative sem: {:.5e}  Target: {:.5e}'.format(sem_relative, sem_relative_target))
 
-    def collect(self):
+        return None
+
+    def results(self):
+        super().results()
         msd_parameters = self.inputs.msd_parameters
         concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
         res = get_diffusion_from_msd(structure=self.inputs.structure, parameters=msd_parameters, trajectory=concatenated_trajectory)
-        try:
-            # Maybe I'm supposed to store the result?
-            # This obviously needs to be changed to how currently new nodes are stored and connected to workchains
-            g = orm.Group.get_from_string(self.inputs.diffusion_parameters.dict.results_group_name)
-            g.add_nodes(res2['msd_results'])
-        except Exception as e:
-            pass
-        self.goto(self.exit)
-        return res2
-    
-    # This function is not really needed
-    def show_msd_now_nosave(self, **kwargs):
-        msd_parameters_d = self.inputs.msd_parameters.get_dict()
-        msd_parameters_d.update(kwargs)
-        concatenated_trajectory = concatenate_trajectory(**self._get_trajectories())['concatenated_trajectory']
-        # I estimate the diffusion coefficients: without storing
-        msd_results = get_diffusion_from_msd(
-            structure=self.inputs.structure,
-            parameters=orm.Dict(dict=msd_parameters_d),
-            trajectory=concatenated_trajectory
-        )
-        return msd_results
+        self.out('msd_results', res)
+        return None
 
     def _get_trajectories(self):
         qb = orm.QueryBuilder()
         qb.append(LinDiffusionWorkChain, filters={'id': self.id}, tag='ldc')
-        qb.append(
-            ReplayMDWorkChain,
-            output_of='ldc',
-            edge_project='label',
-            edge_filters={
-                'type': LinkType.CALL.value,
-                'label': {
-                    'like': 'replay_%'
-                }
-            },
-            tag='repl',
-            edge_tag='mb'
-        )
-        qb.append(
-            orm.TrajectoryData,
-            output_of='repl',
-            edge_filters={
-                'type': LinkType.RETURN.value,
-                'label': 'total_trajectory'
-            },
-            project='*',
-            tag='t'
-        )
+        qb.append(ReplayMDWorkChain, output_of='ldc', edge_project='label', edge_filters={'type': LinkType.CALL.value,
+                'label': {'like': 'replay_%'}}, tag='repl', edge_tag='mb')
+        qb.append(orm.TrajectoryData, output_of='repl', edge_filters={'type': LinkType.RETURN.value, 'label': 'total_trajectory'}, project='*', tag='t')
         return {'{}'.format(item['mb']['label']): item['t']['*'] for item in qb.iterdict()}
 
 
@@ -333,8 +233,8 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
             inp_d.pop('pseudo_{}'.format(kind.name))
             inp_d.pop('pseudo_{}_flipper'.format(kind.name), None)
 
-        # The code label has to be set as an attribute, and can be changed during the dynamics
-        Code.get_from_string(self.ctx.code_string)
+        # The code label has to be set as an attribute, and can be changed during the dynamics, but not really required
+        # Code.get_from_string(self.ctx.code_string)
         self.ctx.num_machines
         self.ctx.walltime_seconds
 
@@ -344,7 +244,7 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
                 raise KeyError('Input requires value with keyword {}'.format(required_kw))
             inp_d.pop(required_kw)
 
-        for optional_kw in ('remote_folder', 'settings', 'moldyn_parameters_thermalize', 'parameters_thermalize'): ## these are not supported yet
+        for optional_kw in ('remote_folder', 'settings'): ## these are not supported yet
             inp_d.pop(optional_kw, None)
 
         diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()

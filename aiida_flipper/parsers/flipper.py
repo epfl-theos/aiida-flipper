@@ -12,7 +12,9 @@ import numpy as np
 from aiida import orm
 from aiida_quantumespresso.parsers.pw import PwParser
 from aiida_flipper.calculations.flipper import FlipperCalculation
-from qe_tools.constants import bohr_to_ang, timeau_to_sec
+bohr_to_ang = 0.52917720859
+timeau_to_sec = 2.418884254E-17
+
 
 POS_REGEX_3 = re.compile(
     """
