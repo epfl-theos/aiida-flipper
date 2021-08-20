@@ -7,67 +7,12 @@ from aiida import orm
 from aiida.engine import calcfunction
 from aiida_flipper.utils.utils import get_or_create_input_node
 
-from math import ceil as math_ceil
 import numpy as np
 import six
 from six.moves import map
 from six.moves import zip
 
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
-
-@calcfunction
-def make_supercell(structure, distance=orm.Int(8)):
-    from supercellor import supercell as sc
-    pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
-    sc_struct = orm.StructureData()
-    sc_struct.set_pymatgen(pym_sc_struct)
-    return sc_struct
-
-
-@calcfunction
-def delithiate_structure(structure, element_to_remove=orm.Str('Li')):
-    """
-    Take the input structure and create two structures from it.
-    One structure is "flipper_compatible" which is essentially the same 
-    structure, just that Li is on first places both in kinds and sites
-    as required for the flipper; the other structure has no Lithium
-    """
-    
-    assert isinstance(structure, orm.StructureData), "input structure needs to be an instance of {}".format(orm.StructureData)
-
-    pinball_kinds = [kind for kind in structure.kinds if kind.symbol == element_to_remove]
-
-    kindnames_to_delithiate = [kind.name for kind in pinball_kinds]
-
-    non_pinball_kinds = [k for i,k in enumerate(structure.kinds) if k.symbol != element_to_remove]
-
-    non_pinball_sites = [s for s in structure.sites if s.kind_name not in kindnames_to_delithiate]
-
-    pinball_sites = [s for s in structure.sites if s.kind_name in kindnames_to_delithiate]
-
-    delithiated_structure = orm.StructureData()
-    pinball_structure = orm.StructureData()
-
-    delithiated_structure.set_cell(structure.cell)
-    delithiated_structure.set_attribute('delithiated', True)
-    pinball_structure.set_cell(structure.cell)
-    pinball_structure.set_attribute('flipper_compatible', True)
-
-    [pinball_structure.append_kind(_) for _ in pinball_kinds]
-    [pinball_structure.append_site(_) for _ in pinball_sites]
-    [pinball_structure.append_kind(_) for _ in non_pinball_kinds]
-    [pinball_structure.append_site(_) for _ in non_pinball_sites]
-
-    [delithiated_structure.append_kind(_) for _ in non_pinball_kinds]
-    [delithiated_structure.append_site(_) for _ in non_pinball_sites]
-
-    delithiated_structure.label = delithiated_structure.get_formula(mode='count')
-    delithiated_structure.set_extra('delithiated_structure', True)
-    pinball_structure.label = pinball_structure.get_formula(mode='count')
-    pinball_structure.set_extra('pinball_structure', True)
-
-    return dict(pinball_structure=pinball_structure, delithiated_structure=delithiated_structure)
-
 
 @calcfunction
 def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
