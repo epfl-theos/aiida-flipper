@@ -117,7 +117,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         #spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
-        spec.inputs['pw']['metadata']['options']['parser_name'].default = 'quantumespresso.flipper'
+        spec.inputs['pw']['metadata']['options'].setdefault('parser_name', 'quantumespresso.flipper')
         spec.inputs['pw']['parent_folder'].required = True
         #spec.inputs.pop('pw.metadata.options.without_xml')
 

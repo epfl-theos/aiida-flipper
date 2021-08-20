@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 
-from __future__ import absolute_import
-from __future__ import print_function
-
 from six.moves import map
 from six.moves import range
 
@@ -10,6 +7,7 @@ import os, re
 import numpy as np
 
 from aiida import orm
+from aiida.common import exceptions
 from aiida_quantumespresso.parsers.pw import PwParser
 from aiida_flipper.calculations.flipper import FlipperCalculation
 bohr_to_ang = 0.52917720859

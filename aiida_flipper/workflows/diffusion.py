@@ -11,6 +11,11 @@ import six
 from six.moves import range
 
 class LinDiffusionWorkChain(BaseRestartWorkChain):
+    """
+    WorkChain that calls ReplayMDWorkChain to start the MD calculations. It calculates diffusion
+    coefficient and calls the ReplayMDWorkChain as long as the diffusion coefficient doens't converge 
+    or the maximum no. of iterations is reached.
+    """
 
     @classmethod
     def define(cls, spec):

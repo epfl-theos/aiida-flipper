@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Calculation function to extract a structure from a trajectory."""
 from aiida.engine import calcfunction
 bohr_to_ang = 0.52917720859
 timeau_to_sec = 2.418884254E-17
@@ -15,6 +14,15 @@ from six.moves import map
 from six.moves import zip
 
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
+
+@calcfunction
+def make_supercell(structure, distance=orm.Int(8)):
+    from supercellor import supercell as sc
+    pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
+    sc_struct = orm.StructureData()
+    sc_struct.set_pymatgen(pym_sc_struct)
+    return sc_struct
+
 
 @calcfunction
 def delithiate_structure(structure, element_to_remove=orm.Str('Li')):
