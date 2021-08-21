@@ -6,9 +6,10 @@ from aiida.engine.processes.workchains.workchain import WorkChain
 
 from aiida.plugins import WorkflowFactory, CalculationFactory
 from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
+import time
 
 @calcfunction
-def make_supercell(structure, distance=orm.Int(2)):
+def make_supercell(structure, distance):
     from supercellor import supercell as sc
     pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
     sc_struct = orm.StructureData()
@@ -16,7 +17,7 @@ def make_supercell(structure, distance=orm.Int(2)):
     return sc_struct
 
 @calcfunction
-def delithiate_structure(structure, element_to_remove=orm.Str('Li')):
+def delithiate_structure(structure, element_to_remove):
     """
     Take the input structure and create two structures from it.
     One structure is "flipper_compatible" which is essentially the same 
@@ -76,32 +77,45 @@ class PreProcessWorkChain(WorkChain):
         spec.input('PwBaseWorkChain_builder_parameters', valid_type=orm.Dict, required=False,
         help='This is a dictionary containing the builder parameters to be used in the host lattice scf run')
         spec.inputs['PwBaseWorkChain_builder_parameters'].default = lambda: orm.Dict(dict={
+            'distance': 1,
+            'element_to_remove': 'Li',
             'code': 'pw_pinball_5.2',
             'walltime': 14400,
             'num_cores_per_mpiproc': 8,
             'num_machines': 1})
 
         spec.outline(
-            if_(cls.should_run_supercell)(cls.supercell), 
-            if_(cls.should_run_scf)(cls.scf_run), 
+            # if_(cls.should_run_supercell)(cls.supercell), 
+            # if_(cls.should_run_scf)(cls.scf_run), 
+            cls.supercell, cls.scf_run,
+            while_(cls.should_run_process)(cls.wait_for_it,),
             if_(cls.inspect_scf_run)(cls.stash_output), 
             cls.result)
 
         spec.output('pinball_supercell', valid_type=orm.StructureData)
         spec.output('scf_output', valid_type=orm.RemoteData,
         help='The node containing the symbolic link to the stashed charged densities.')
+
+        spec.exit_code(611, 'ERROR_SCF_FINISHED_WITH_ERROR',
+            message='Host Lattice pw scf calculation finished but with some error code.')
+        spec.exit_code(612, 'ERROR_SCF_DID_NOT_FINISH', 
+            message='Host Lattice pw scf calculation did not finish.')
         
-    def should_run_scf(self):
-        ## returns whether an scf should run depending if it was run previously 
-        self
-    def should_run_supercell(self):
-        ## returns whether the supercell should be generated depending if it already exists 
-        self
+    # def should_run_supercell(self):
+    #     ## returns whether an scf should run depending if it was run previously 
+    #     self
+    #     return self.ctx.run_supercell
+
+    # def should_run_scf(self):
+    #     ## returns whether the supercell should be generated depending if it already exists 
+    #     self
+    #     return self.ctx.run_scf
 
     def supercell(self):
         ## Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
-        sc_struct = make_supercell(self.inputs.structure)
-        self.ctx.supercell = delithiate_structure(sc_struct)
+        supercell_parameters_d = self.inputs['PwBaseWorkChain_builder_parameters'].get_dict()
+        sc_struct = make_supercell(self.inputs.structure, orm.Int(supercell_parameters_d['distance']))
+        self.ctx.supercell = delithiate_structure(sc_struct, orm.Str(supercell_parameters_d['element_to_remove']))
 
     def scf_run(self):
         ## Run an scf calculation by launching the PwBaseWorkChain
@@ -136,12 +150,34 @@ class PreProcessWorkChain(WorkChain):
         builder.max_iterations = orm.Int(1)
         self.ctx.scf_workchain = self.submit(builder)
 
+    def should_run_process(self):
+        if self.ctx.scf_workchain.attributes['process_state'] == 'running':
+            self.ctx.is_running = True
+            time.sleep(5)
+        else:
+            self.ctx.is_running = False
+        return self.ctx.is_running
+
+    def wait_for_it(self):
+        time.sleep(5)
+
     def inspect_scf_run(self):
         ## Check if the scf finished properly, and return True if yes
+
+        # while True:
+        #     if self.ctx.scf_workchain.attributes['process_state'] == 'running':
+        #         time.sleep(5)
+        #     else:
+        #         self.report('Host Lattice scf is not running anymore')
+        #         break
+
         status = self.ctx.scf_workchain.attributes['process_state']
-        exit_status = self.ctx.scf_workchain.attributes['exit_status']
+        try: exit_status = self.ctx.scf_workchain.attributes['exit_status']
+        except: pass
+
         if status=='finished' and exit_status==0:
             self.ctx.scf_run_success = True
+            return self.ctx.scf_run_success
         elif status=='finished' and exit_status!=0:
             self.ctx.scf_run_success = False
             self.report('Host Lattice scf finished but with some error code.')
@@ -151,16 +187,15 @@ class PreProcessWorkChain(WorkChain):
             self.report('Host Lattice scf did not finish.')
             return self.exit_codes.ERROR_SCF_DID_NOT_FINISH
 
-        return self.ctx.scf_run_success
-
-
     def stash_output(self):
         ## Querying the stashed folder
         qb = orm.QueryBuilder()
         qb.append(WorkflowFactory('quantumespresso.pw.base'), filters={'id': {'==':self.ctx.scf_workchain.pk}}, tag='pw')
         qb.append(orm.RemoteStashFolderData, with_incoming='pw')
-        stashed_folder_data, = qb.first()
-        self.ctx.stashed_output_folder = orm.RemoteData(remote_path=stashed_folder_data.attributes['target_basepath'], computer=stashed_folder_data.computer)
+        try: 
+            stashed_folder_data, = qb.first()
+            self.ctx.stashed_output_folder = orm.RemoteData(remote_path=stashed_folder_data.attributes['target_basepath'], computer=stashed_folder_data.computer)
+        except: self.ctx.stashed_output_folder = None
 
     def result(self):
         if self.ctx.scf_run_success:
