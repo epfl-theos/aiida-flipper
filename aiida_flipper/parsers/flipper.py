@@ -75,10 +75,10 @@ class FlipperParser(PwParser):
 
         raise_if_nan_in_values = not (calc_input_dict['CONTROL'].get('lhustle', False))
         # If ******* occurs (i.e. value not printed), I will raise immediately if this
-        # flag is set to True. Before, this was checked at the very end, which waists computer time.
+        # flag is set to True. Before, this was checked at the very end, which wastes computer time.
 
         try:
-            # This referes to the SAMPLING timestep for the trajectory:
+            # This refers to the SAMPLING timestep for the trajectory:
             timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
         except KeyError:
             return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
@@ -87,7 +87,7 @@ class FlipperParser(PwParser):
 
         list_of_files = self.retrieved.list_object_names()
         # the stdout should exist
-        filename_stdout = self.node.get_attribute('output_filename')
+        filename_stdout = self.node.get_attribute('output_filename') #this is aiida.out folder
         if filename_stdout not in list_of_files:
             return self.exit_codes.ERROR_OUTPUT_STDOUT_MISSING
 
