@@ -1,0 +1,69 @@
+default_inputs:
+    clean_workdir: False
+    max_md_convergence_iterations: 5
+    md:
+        metadata:
+            label: ''
+        nstep: 100
+        meta_parameters:
+            conv_thr_per_atom: 0.2e-9
+            etot_conv_thr_per_atom: 1.e-5
+        pseudo_family: 'SSSP/1.1.2/PBEsol/efficiency'
+        pw:
+            settings:
+                gamma_only: True
+            metadata:
+                options:
+                    parser_name: 'quantumespresso.flipper'
+                    resources:
+                        num_machines: 1
+                        num_cores_per_mpiproc: 1
+                        num_mpiprocs_per_machine: 8
+                    max_wallclock_seconds: 43200  # Twelve hours
+                    withmpi: True
+            parameters:
+                CONTROL:
+                    calculation: md
+                    dt: 10
+                    lflipper: True
+                    iprint: 1
+                    ldecompose_forces: True
+                    ldecompose_ewald: True
+                    flipper_do_nonloc: True
+                    forc_conv_thr: 1.e-4
+                    tprnfor: True
+                SYSTEM:
+                    nosym: True
+                ELECTRONS:
+                    electron_maxstep: 80
+                    mixing_beta: 0.4
+                IONS:
+                    ion_temperature: 'svr'
+                    nraise: 10
+                    tempw: 1000
+
+default_protocol: moderate
+protocols:
+    moderate:
+        description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
+    precise:
+        description: 'Protocol to perform the computation at high precision at higher computational cost.'
+        md: 
+            meta_parameters:
+                conv_thr_per_atom: 0.1e-9
+                etot_conv_thr_per_atom: 0.5e-5
+            pseudo_family: 'SSSP/1.1/PBE/precision'
+            pw:
+                parameters:
+                    CONTROL:
+                        forc_conv_thr: 0.5e-4
+    fast:
+        description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
+        md:
+            meta_parameters:
+                conv_thr_per_atom: 0.4e-9
+                etot_conv_thr_per_atom: 1.e-4
+            pw:
+                parameters:
+                    CONTROL:
+                        forc_conv_thr: 1.e-3

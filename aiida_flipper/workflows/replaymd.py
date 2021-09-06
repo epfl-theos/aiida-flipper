@@ -16,7 +16,7 @@ from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
 from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
 
-#PwCalculation = CalculationFactory('quantumespresso.pw')
+PwCalculation = CalculationFactory('quantumespresso.pw')
 FlipperCalculation = CalculationFactory('quantumespresso.flipper')
 #HustlerCalculation = CalculationFactory('quantumespresso.hustler')
 
@@ -114,7 +114,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         # yapf: disable
         # NOTE: input, outputs, and exit_codes are inherited from PwBaseWorkChain
         super().define(spec)
-        #spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
+        spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
         spec.inputs['pw']['metadata']['options'].setdefault('parser_name', 'quantumespresso.flipper')

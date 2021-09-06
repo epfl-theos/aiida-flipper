@@ -289,7 +289,7 @@ class FlipperParser(PwParser):
         if nat_set:
             return self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_1
 
-        # cells = np.array([in_struc.cell] * nstep)
+        cells = np.array([in_struc.cell] * nstep)
         symbols = np.array([str(i.kind_name) for i in in_struc.sites[:nat]])
 
         # Transforming bohr to angstrom, because this is mostly what's being used in AiiDA.
@@ -301,7 +301,7 @@ class FlipperParser(PwParser):
         trajectory_data = orm.TrajectoryData()
         trajectory_data.set_trajectory(
             stepids=np.array(scalar_quantities[:, 0], dtype=int),
-            # cells=cells,  # flipper always runs NVT
+            cells=cells,  # flipper always runs NVT, but need to standardise with aiida
             symbols=symbols,
             positions=positions,
             velocities=velocities
@@ -313,7 +313,7 @@ class FlipperParser(PwParser):
         # Old: positions were stored in atomic coordinates, made conversions a bit messy,
         # and makes it hard to use some functions that suppose angstroms as units
         trajectory_data.set_attribute('units|positions', 'angstrom')
-        # trajectory_data.set_attribute('units|cells', 'angstrom')
+        trajectory_data.set_attribute('units|cells', 'angstrom')    
         trajectory_data.set_attribute('units|velocities', 'atomic')
 
         # FORCES:
