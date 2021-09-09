@@ -8,33 +8,47 @@ from aiida.engine import calcfunction
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 import numpy as np
-import six
-from six.moves import map
-from six.moves import zip
 
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
-@calcfunction
-def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **trajectories):
+# @calcfunction
+def get_diffusion_from_msd(structure, parameters, trajectory):
     """
     Compute the Diffusion coefficient from the mean-square displacement.
 
-    :param structure:  the StructureData node or the ASE of the trajectories
+    :param structure: the StructureData node or the ASE of the trajectories
+    :param trajectory: concatenated trajectories in the form of one TrajectoryData
     :param parameters: a ParameterData node or a dictionary containing the parameters for MSD computation. Specifically:
         equilibration_time_fs, which is the time to assumed to equilibrate the atoms
         decomposed, which if true, decomposes the MSD into contribution of each atom types
     and all the other samos.DynamicsAnalyzer.get_msd input parameters:
-        species_of_interest
-        stepsize_t
-        stepsize_tau
-        t_start_fs OR t_start_ps OR t_start_dt
-        t_end_fs OR t_end_ps OR t_end_dt
-        nr_of_blocks OR block_length_fs OR block_length_ps OR block_length_dt
-        t_start_fit_fs OR t_start_fit_ps OR t_start_fit_dt
-        t_end_fit_fs OR t_end_fit_ps OR t_end_fit_dt
-        do_long
-        t_long_end_fs OR t_long_end_ps OR t_long_end_dt OR t_long_factor
-        do_com
+        do_long - doesn't exist...
+        t_long_end_fs OR t_long_end_ps OR t_long_end_dt OR t_long_factor - non existent...
+        :param list species_of_interest: The species to calculate.
+        :param int stepsize_t: Integer value of the outer-loop stepsize.
+            Setting this to higher than 1 will decrease the resolution. Defaults to 1
+        :param int stepsize_tau: Integer value of the inner loop stepsize.
+            If higher than 1, the sliding window will be moved more sparsely through the block. Defaults to 1.
+        :param float t_start_fs: Minimum value of the sliding window in femtoseconds.
+        :param float t_start_ps: Minimum value of the sliding window in picoseconds.
+        :param int t_start_dt: Minimum value of the sliding window in multiples of the trajectory timestep.
+        :param float t_end_fs: Maximum value of the sliding window in femtoseconds.
+        :param float t_end_ps: Maximum value of the sliding window in picoseconds.
+        :param int t_end_dt: Maximum value of the sliding window in multiples of the trajectory timestep.
+        :param float block_length_fs: Block size for trajectory blocking in fs.
+        :param float block_length_ps: Block size for trajectory blocking in picoseconds.
+        :param int block_length_dt: Block size for trajectory blocking in multiples of the trajectory timestep.
+        :param int nr_of_blocks: Nr of blocks that the trajectory should be split in (excludes setting of block_length). If nothing else is set, defaults to 1.
+        :param float t_start_fit_fs: Time to start the fitting of the time series in femtoseconds.
+        :param float t_start_fit_ps: Time to start the fitting of the time series in picoseconds.
+        :param int t_start_fit_dt: Time to start the fitting of the time series in multiples of the trajectory timestep.
+        :param float t_end_fit_fs: Time to end the fitting of the time series in femtoseconds.
+        :param float t_end_fit_ps: Time to end the fitting of the time series in picoseconds.
+        :param int t_end_fit_dt: Time to end the fitting of the time series in multiples of the trajectory timestep.
+        :param bool do_com: Whether to calculate centre of mass diffusion.
+
+        Note: assert that t_end_dt > t_end_fit_dt
+
 
     If t_start_fit and t_end_fit are arrays, the Diffusion coefficient will be calculated for each pair of values.
     This allows one to study its convergence as a function of the window chosen to fit the MSD.
@@ -57,38 +71,14 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     else:
         raise TypeError('parameters type not valid')
 
-    for traj in six.itervalues(trajectories):
-        if not isinstance(traj, orm.TrajectoryData):
-            raise TypeError('trajectories must be TrajectoryData')
-    trajdata_list = list(trajectories.values())
+    if not isinstance(trajectory, orm.TrajectoryData):
+        raise TypeError('trajectory must be TrajectoryData')
 
     ####################### CHECKS ####################
-    units_set = set()
-    timesteps_set = set()
-    for t in trajdata_list:
-        units_set.add(t.get_attribute('units|positions'))
-    try:
-        for t in trajdata_list:
-            timesteps_set.add(t.get_attribute('timestep_in_fs'))
-    except AttributeError:
-        # not really needed, should probably just throw an error if exception
-        for t in trajdata_list:
-            input_dict = t.inp.output_trajectory.inp.parameters.get_dict()
-            # get the timestep on the fly
-            timesteps_set.add(
-                timeau_to_sec * 2 * 1e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
-            )
+    # Checking if everything is consistent
 
-    # Checking if everything is consistent,
-    # Check same units for each trajectory:
-    units_positions = units_set.pop()
-    if units_set:
-        raise Exception('Incommensurate units')
-    # Same timestep is mandatory!
-    timestep_fs = timesteps_set.pop()
-    if timesteps_set:
-        timesteps_set.add(timestep_fs)
-        raise Exception('Multiple timesteps {}'.format(timesteps_set))
+    units_positions = trajectory.get_attribute('units|positions')
+    timestep_fs = trajectory.get_attribute('timestep_in_fs')
     equilibration_steps = int(parameters_d.pop('equilibration_time_fs', 0) / timestep_fs)
     if units_positions in ('bohr', 'atomic'):
         pos_conversion = bohr_to_ang
@@ -98,34 +88,26 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
         raise RuntimeError('Unknown units for positions {}'.format(units_positions))
 
     ####################### COMPUTE MSD ####################
-    trajectories = []
     species_of_interest = parameters_d.pop('species_of_interest', None)
-    # if species_of_interest is unicode:
-    if isinstance(species_of_interest, (tuple, set, list)):
-        species_of_interest = list(map(str, species_of_interest))
-    for trajdata in trajdata_list:
-        positions = pos_conversion * trajdata.get_positions()[equilibration_steps:]
-        nat_in_traj = positions.shape[1]
-        trajectory = Trajectory(timestep=t.get_attribute('timestep_in_fs'))
-        if nat_in_traj != len(atoms):
-            indices = [i for i, a in enumerate(atoms.get_chemical_symbols()) if a in species_of_interest]
-            if len(indices) == nat_in_traj:
-                trajectory.set_atoms(atoms[indices])
-            else:
-                raise ValueError('number of atoms in trajectory is weird')
+
+    positions = pos_conversion * trajectory.get_positions()[equilibration_steps:]
+    nat_in_traj = positions.shape[1]
+    trajectory = Trajectory(timestep=trajectory.get_attribute('timestep_in_fs'))
+    if nat_in_traj != len(atoms):
+        indices = [i for i, a in enumerate(atoms.get_chemical_symbols()) if a in species_of_interest]
+        if len(indices) == nat_in_traj:
+            trajectory.set_atoms(atoms[indices])
         else:
-            trajectory.set_atoms(atoms)
-        trajectory.set_positions(positions)
-        trajectories.append(trajectory)
+            raise ValueError('number of atoms in trajectory is weird')
+    else:
+        trajectory.set_atoms(atoms)
+    trajectory.set_positions(positions)
 
     # compute msd
-    dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity', 0))
-    dynanalyzer.set_trajectories(trajectories)
-    decomposed = parameters_d.pop('decomposed', 0)
+    dynanalyzer = DynamicsAnalyzer(verbosity=parameters_d.pop('verbosity'))
+    dynanalyzer.set_trajectories(trajectory)
+    decomposed = parameters_d.pop('decomposed')
     msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, decomposed=decomposed, **parameters_d)
-
-    if plot_and_exit:
-        raise NotImplementedError
 
     # define MSD-results array
     arr_data = orm.ArrayData()
@@ -134,10 +116,8 @@ def get_diffusion_from_msd(structure, parameters, plot_and_exit=False, **traject
     for arrayname in msd_iso.get_arraynames():
         arr_data.set_array(arrayname, msd_iso.get_array(arrayname))
     # Following attributes are results_dict of samos.analysis.DynamicsAnalyzer.get_msd()
-    for attr, val in msd_iso.get_attribute().items():
+    for attr, val in msd_iso.get_attrs().items():
         arr_data.set_attribute(attr, val)
-#     # probably not needed to return based on decomposed keyword
-#     return {'msd_decomposed_results': arr_data} if decomposed else {'msd_results': arr_data}
     return arr_data
 
 
@@ -158,7 +138,7 @@ def get_structure_from_trajectory(trajectory, parameters, structure=None, settin
         * missing_velocities: The velocities to give, if complete_missing and create_settings are both set to True. By default [0,0,0]
         * recenter: When true, set the center of mass momentum to 0 (when restarting from a trajectory that doesn't preserve the center of mass.
     :param structure: If comlete_missing is True, I need a structure
-    :param settings: If create_settings is True, I can (if provided) just update the dictionary of this instance.
+    :param  : If create_settings is True, I can (if provided) just update the dictionary of this instance.
     """
     from aiida.common.exceptions import InputValidationError
 
@@ -265,7 +245,7 @@ def concatenate_trajectory(**kwargs):
             else:
                 traj.set_array(arrname, np.concatenate([t.get_array(arrname) for t in sorted_trajectories]))
     [traj.set_attribute(k, v) for k, v in sorted_trajectories[0].attributes_items() if not k.startswith('array|')]
-    if 'timestep_in_fs' in sorted_trajectories[0].attrs():
+    if 'timestep_in_fs' in sorted_trajectories[0].attributes:
         traj.set_attribute('sim_time_fs', traj.get_array('steps').size * sorted_trajectories[0].get_attribute('timestep_in_fs'))
     return {'concatenated_trajectory': traj}
 

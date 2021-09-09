@@ -22,8 +22,8 @@ class FlipperCalculation(PwCalculation):
 
         super(FlipperCalculation, cls).define(spec)
         # This input is somehow overwritten by PwCalculation's, so need to specify while submitting jobs using flipper parser even when specified here
-        spec.input('metadata.options.parser_name', valid_type=str, required=True, default='quantumespresso.flipper')
-        spec.inputs('metadata.options.parser_name', valid_type=str, default='quantumespresso.flipper')
+        # spec.input('metadata.options.parser_name', valid_type=str, required=True, default='quantumespresso.flipper')
+        # spec.inputs('metadata.options.parser_name', valid_type=str, default='quantumespresso.flipper')
     
         # Unrecoverable errors
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',

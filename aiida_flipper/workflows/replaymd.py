@@ -117,7 +117,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
-        spec.inputs['pw']['metadata']['options'].setdefault('parser_name', 'quantumespresso.flipper')
         spec.inputs['pw']['parent_folder'].required = True
         #spec.inputs.pop('pw.metadata.options.without_xml')
 
@@ -189,7 +188,48 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
+    
+    ## Builder option doesn't work properly if called from this class, best to use get_builder_from_protocol() in LinDiffWorkChain
+    '''
+    @classmethod
+    def get_protocol_filepath(cls):
+        """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
+        from importlib_resources import files
+        from aiida_flipper.workflows import protocols as proto
+        return files(proto) / 'replay.yaml'
 
+    @classmethod
+    def get_builder_from_protocol(
+        cls, code, structure, stashed_folder, nstep=None, protocol=None, overrides=None, **kwargs
+    ):
+        """Return a builder prepopulated with inputs selected according to the chosen protocol.
+
+        :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
+        :param structure: the ``StructureData`` instance to use.
+        :param stashed_folder: RemoteData type, must be specified, contains the charge densities of host lattice.
+        :param nstep: no. of MD steps to run, if not specified, the default(1.e4) will be used.
+        :param protocol: protocol to use, if not specified, the default will be used.
+        :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
+        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
+            sub processes that are called by this workchain.
+        :return: a process builder instance with all inputs defined ready for launch.
+        """
+        from aiida_quantumespresso.common.types import ElectronicType
+
+        inputs = cls.get_protocol_inputs(protocol, overrides)
+
+        args = (code, structure, protocol)
+        builder = PwBaseWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs, **kwargs)
+
+        kpoints = orm.KpointsData()
+        kpoints.set_kpoints_mesh([1,1,1])
+        builder.kpoints = kpoints
+
+        builder['pw']['parent_folder'] = stashed_folder
+        if nstep: builder['nstep'] = nstep
+
+        return builder
+    '''
     def validate_parameters(self):
         """Validate inputs that might depend on each other and cannot be validated by the spec.
 
