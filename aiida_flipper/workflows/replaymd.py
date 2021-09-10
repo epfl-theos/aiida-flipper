@@ -4,7 +4,14 @@ from aiida import orm
 from aiida.common import AttributeDict, exceptions
 from aiida.common.links import LinkType
 from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
-from aiida.plugins import CalculationFactory
+from aiida.plugins import CalculationFactory, GroupFactory
+
+## builder imports
+from aiida.common.lang import type_check
+from aiida_quantumespresso.common.types import ElectronicType, SpinType
+SsspFamily = GroupFactory('pseudo.family.sssp')
+PseudoDojoFamily = GroupFactory('pseudo.family.pseudo_dojo')
+CutoffsPseudoPotentialFamily = GroupFactory('pseudo.family.cutoffs')
 
 #from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
 from aiida_quantumespresso.utils.defaults.calculation import pw as qe_defaults
@@ -48,7 +55,7 @@ def get_total_trajectory(workchain, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
-        res, calc = concatenate_trajectory.run_get_node(**traj_d) # check if this function is used correctly
+        res = concatenate_trajectory.run_get_node(**traj_d) # check if this function is used correctly
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
         # no reason to concatenate if I have only one trajectory (saves space in repository)
@@ -190,7 +197,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.mdsteps_done = 0
     
     ## Builder option doesn't work properly if called from this class, best to use get_builder_from_protocol() in LinDiffWorkChain
-    '''
+    
     @classmethod
     def get_protocol_filepath(cls):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
@@ -200,36 +207,115 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, stashed_folder, nstep=None, protocol=None, overrides=None, **kwargs
+        cls,
+        code,
+        structure,
+        stashed_folder,
+        nstep=None,
+        protocol=None,
+        overrides=None,
+        electronic_type=ElectronicType.INSULATOR,
+        spin_type=SpinType.NONE,
+        initial_magnetic_moments=None,
+        **_
     ):
-        """Return a builder prepopulated with inputs selected according to the chosen protocol.
-
+        """
+        !! This is a copy of PwBaseWorkChain get_builder_from_protocol() with a change of default electronic type to insulator and addition of flipper inputs and loading of flipper protocol file!!
+        Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
-        :param stashed_folder: RemoteData type, must be specified, contains the charge densities of host lattice.
-        :param nstep: no. of MD steps to run, if not specified, the default(1.e4) will be used.
         :param protocol: protocol to use, if not specified, the default will be used.
-        :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
-        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
-            sub processes that are called by this workchain.
+        :param overrides: optional dictionary of inputs to override the defaults of the protocol.
+        :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
+        :param spin_type: indicate the spin polarization type to use through a ``SpinType`` instance.
+        :param initial_magnetic_moments: optional dictionary that maps the initial magnetic moment of each kind to a
+            desired value for a spin polarized calculation. Note that for ``spin_type == SpinType.COLLINEAR`` an initial
+            guess for the magnetic moment is automatically set in case this argument is not provided.
         :return: a process builder instance with all inputs defined ready for launch.
         """
-        from aiida_quantumespresso.common.types import ElectronicType
+        from aiida_quantumespresso.workflows.protocols.utils import get_starting_magnetization
+
+        if isinstance(code, str):
+            code = orm.load_code(code)
+
+        type_check(code, orm.Code)
+        type_check(electronic_type, ElectronicType)
+        type_check(spin_type, SpinType)
+
+        if electronic_type not in [ElectronicType.METAL, ElectronicType.INSULATOR]:
+            raise NotImplementedError(f'electronic type `{electronic_type}` is not supported.')
+
+        if spin_type not in [SpinType.NONE, SpinType.COLLINEAR]:
+            raise NotImplementedError(f'spin type `{spin_type}` is not supported.')
+
+        if initial_magnetic_moments is not None and spin_type is not SpinType.COLLINEAR:
+            raise ValueError(f'`initial_magnetic_moments` is specified but spin type `{spin_type}` is incompatible.')
 
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        args = (code, structure, protocol)
-        builder = PwBaseWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs, **kwargs)
+        meta_parameters = inputs.pop('meta_parameters')
+        pseudo_family = inputs.pop('pseudo_family')
 
-        kpoints = orm.KpointsData()
-        kpoints.set_kpoints_mesh([1,1,1])
-        builder.kpoints = kpoints
+        natoms = len(structure.sites)
+
+        try:
+            pseudo_set = (PseudoDojoFamily, SsspFamily, CutoffsPseudoPotentialFamily)
+            pseudo_family = orm.QueryBuilder().append(pseudo_set, filters={'label': pseudo_family}).one()[0]
+        except exceptions.NotExistent as exception:
+            raise ValueError(
+                f'required pseudo family `{pseudo_family}` is not installed. Please use `aiida-pseudo install` to'
+                'install it.'
+            ) from exception
+
+        try:
+            cutoff_wfc, cutoff_rho = pseudo_family.get_recommended_cutoffs(structure=structure, unit='Ry')
+        except ValueError as exception:
+            raise ValueError(
+                f'failed to obtain recommended cutoffs for pseudo family `{pseudo_family}`: {exception}'
+            ) from exception
+
+        parameters = inputs['pw']['parameters']
+        parameters['CONTROL']['etot_conv_thr'] = natoms * meta_parameters['etot_conv_thr_per_atom']
+        parameters['ELECTRONS']['conv_thr'] = natoms * meta_parameters['conv_thr_per_atom']
+        parameters['SYSTEM']['ecutwfc'] = cutoff_wfc
+        parameters['SYSTEM']['ecutrho'] = cutoff_rho
+
+        if electronic_type is ElectronicType.METAL:
+            parameters['SYSTEM']['occupations'] = 'smearing'
+            parameters['SYSTEM'].update({'degauss': 0.01, 'smearing': 'cold'})
+
+        if spin_type is SpinType.COLLINEAR:
+            starting_magnetization = get_starting_magnetization(structure, pseudo_family, initial_magnetic_moments)
+
+            parameters['SYSTEM']['nspin'] = 2
+            parameters['SYSTEM']['starting_magnetization'] = starting_magnetization
+
+        # pylint: disable=no-member
+        builder = cls.get_builder()
+        builder.pw['code'] = code
+        builder.pw['pseudos'] = pseudo_family.get_pseudos(structure=structure)
+        builder.pw['structure'] = structure
+        builder.pw['parameters'] = orm.Dict(dict=parameters)
+        builder.pw['metadata'] = inputs['pw']['metadata']
+        if 'parallelization' in inputs['pw']:
+            builder.pw['parallelization'] = orm.Dict(dict=inputs['pw']['parallelization'])
+        builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
+        if 'settings' in inputs['pw']:
+            builder['pw'].settings = orm.Dict(dict=inputs['pw']['settings'])
+            if inputs['pw']['settings']['gamma_only']:
+                kpoints = orm.KpointsData()
+                kpoints.set_kpoints_mesh([1,1,1])
+                builder.kpoints = kpoints
+            else: 
+                raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
 
         builder['pw']['parent_folder'] = stashed_folder
         if nstep: builder['nstep'] = nstep
+        else: builder['nstep'] = orm.Int(inputs['nstep'])    
 
+        # pylint: enable=no-member
         return builder
-    '''
+
     def validate_parameters(self):
         """Validate inputs that might depend on each other and cannot be validated by the spec.
 
@@ -365,7 +451,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             if self.ctx.inputs.settings:
                 kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
 
-            res, calc = get_structure_from_trajectory.run_get_node(**kwargs)
+            res = get_structure_from_trajectory.run_get_node(**kwargs)
 
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
@@ -379,7 +465,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             #self.ctx.inputs.pop('parent_folder', None)
 
         self.ctx.inputs.parameters['CONTROL']['nstep'] = self.ctx.mdsteps_todo
-        self.ctx.inputs.metadata['label'] = str(self.ctx.iteration + 1)
+        self.ctx.inputs.metadata['label'] = 'flipper_'+str(self.ctx.iteration + 1)
         self.ctx.has_initial_velocities = False
 
         ## if this is not flipper MD

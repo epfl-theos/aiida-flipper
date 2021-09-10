@@ -11,7 +11,7 @@ import numpy as np
 
 SINGULAR_TRAJ_KEYS = ('symbols', 'atomic_species_name')
 
-# @calcfunction
+@calcfunction
 def get_diffusion_from_msd(structure, parameters, trajectory):
     """
     Compute the Diffusion coefficient from the mean-square displacement.

@@ -2,7 +2,7 @@ default_inputs:
     clean_workdir: False
     metadata:
         label: ''
-    nstep: 10000
+    nstep: 100000
     meta_parameters:
         conv_thr_per_atom: 0.2e-9
         etot_conv_thr_per_atom: 1.e-5
@@ -22,9 +22,9 @@ default_inputs:
         parameters:
             CONTROL:
                 calculation: md
-                dt: 10
+                dt: 50
                 lflipper: True
-                iprint: 1
+                iprint: 1000
                 ldecompose_forces: True
                 ldecompose_ewald: True
                 flipper_do_nonloc: True
@@ -54,6 +54,7 @@ protocols:
             parameters:
                 CONTROL:
                     forc_conv_thr: 0.5e-4
+                    dt: 10
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
         meta_parameters:
@@ -63,3 +64,5 @@ protocols:
             parameters:
                 CONTROL:
                     forc_conv_thr: 1.e-3
+                    dt: 200
+                    iprint: 10000

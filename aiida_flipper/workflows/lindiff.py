@@ -38,7 +38,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.input('max_md_convergence_iterations', valid_type=orm.Int, default=lambda: orm.Int(6),
             help='The maximum number of MD runs that will be called by this workchain.')
         spec.input('min_md_convergence_iterations', valid_type=orm.Int, default=lambda: orm.Int(3),
-            help='The minimum number of MD runs that will be called by this workchain.')
+            help='The minimum number of MD runs that will be called by this workchain even if diffusion coefficient has converged.')
         spec.input('diffusion_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the threshold values for diffusion convergence.')
         spec.inputs['diffusion_parameters'].default = lambda: orm.Dict(dict={
             'sem_threshold': 1.e-5,
@@ -151,11 +151,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
     def should_run_replay(self):
         """Return whether a relaxation workchain should be run.
 
-        This is the case as long as the last process has not finished successfully, the maximum number of restarts has
-        not yet been exceeded, and the number of maximum replays has not been reached or diffusion coefficient converged.
+        This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
         """
-        return not(self.ctx.is_finished) and (
-            not(self.ctx.converged) or (self.inputs.max_md_convergence_iterations.value <= self.ctx.replay_counter))
+        if (self.inputs.min_md_convergence_iterations >= self.ctx.replay_counter): return True
+        elif (not(self.ctx.converged) or (self.inputs.max_md_convergence_iterations <= self.ctx.replay_counter)): return True
+        else: return False
 
     def run_replay(self):
         """Run the `ReplayMDWorkChain` to run a `FlipperCalculation`."""
@@ -249,6 +249,44 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 self.ctx.is_converged = True
             return
 
+        # !! somewhere here check if msd converged
+        self.ctx.is_finished = True
+
+        concat_input_d = get_trajectories_dict(last_calc_list)
+        concat_input_d.update({'remove_repeated_last_step': True})
+        concatenated_trajectory = concatenate_trajectory(**concat_input_d)['concatenated_trajectory']
+
+        #store following as context variables to be later used in results
+
+        msd_results = get_diffusion_from_msd(
+                structure=pinball_struct,
+                parameters=get_or_create_input_node(orm.Dict, msd_parameters, store=False),
+                trajectory=concatenated_trajectory)
+        sem = msd_results.attributes['{}'.format(msd_parameters['species_of_interest'][0])]['diffusion_sem_cm2_s']
+        mean_d = msd_results.attributes['{}'.format(msd_parameters['species_of_interest'][0])]['diffusion_mean_cm2_s']
+        sem_relative = sem / mean_d
+        sem_target = diffusion_parameters['sem_threshold']
+        sem_relative_target = diffusion_parameters['sem_relative_threshold']
+
+        if (mean_d < 0.):
+            # the diffusion is negative: means that the value is not converged enough yet
+            self.report(f'The Diffusion coefficient ( {mean_d} +/- {sem} ) is negative, i.e. not converged.')
+            self.ctx.converged = False
+        elif (sem < sem_target):
+            # This means that the  standard error of the mean in my diffusion coefficient is below the target accuracy
+            self.report(f'The error ( {sem} ) is below the target value ( {sem_target} ).') 
+            self.ctx.converged = True
+        elif (sem_relative < sem_relative_target):
+            # the relative error is below my targe value
+            self.report(f'The relative error ( {sem_relative} ) is below the target value ( {sem_relative_target} ).')
+            self.ctx.converged = True
+        else:
+            self.report('The error has not converged')
+            self.report('absolute sem: {:.5e}  Target: {:.5e}'.format(sem, sem_target))
+            self.report('relative sem: {:.5e}  Target: {:.5e}'.format(sem_relative, sem_relative_target))
+            self.ctx.converged = False
+
+
         # Check whether the cell volume is converged
         volume_threshold = self.inputs.diffusion_parameters.value
         volume_difference = abs(prev_cell_volume - curr_cell_volume) / prev_cell_volume
@@ -310,14 +348,3 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         if cleaned_calcs:
             self.report(f"cleaned remote folders of calculations: {' '.join(map(str, cleaned_calcs))}")
 
-    @staticmethod
-    def _fix_atomic_positions(structure, settings):
-        """Fix the atomic positions, by setting the `FIXED_COORDS` key in the `settings` input node."""
-        if settings is not None:
-            settings = settings.get_dict()
-        else:
-            settings = {}
-
-        settings['FIXED_COORDS'] = [[True, True, True]] * len(structure.sites)
-
-        return settings
