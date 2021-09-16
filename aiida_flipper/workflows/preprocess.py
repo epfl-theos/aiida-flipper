@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 
 from aiida import orm
-from aiida.engine.processes.functions import calcfunction
 from aiida.engine.processes.workchains.workchain import WorkChain
+from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
+from aiida.common import AttributeDict, exceptions
 
 from aiida.plugins import WorkflowFactory
-from aiida.engine import ToContext, if_, ExitCode
+from aiida.engine import ToContext, if_, ExitCode, append_
+from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 
-@calcfunction
+from aiida_quantumespresso.common.types import ElectronicType
+from aiida.common.datastructures import StashMode
+PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
+
 def make_supercell(structure, distance):
     from supercellor import supercell as sc
     pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
@@ -15,7 +20,6 @@ def make_supercell(structure, distance):
     sc_struct.set_pymatgen(pym_sc_struct)
     return sc_struct
 
-@calcfunction
 def delithiate_structure(structure, element_to_remove):
     """
     Take the input structure and create two structures from it.
@@ -58,36 +62,34 @@ def delithiate_structure(structure, element_to_remove):
 
     return dict(pinball_structure=pinball_structure, delithiated_structure=delithiated_structure)
 
-
-class PreProcessWorkChain(WorkChain):
+class PreProcessWorkChain(ProtocolMixin, WorkChain):
     """
     WorkChain that takes a primitive structure as its input and makes supercell using Supercellor class,
     makes the pinball and delithiated structures and then performs an scf calculation on the host lattice,
     stashes the charge densities and wavefunctions. It outputs the pinball supercell and RemoteData containing 
     charge densities to be used in all future workchains for performing MD.
     """
-
     @classmethod
     def define(cls, spec):
         super().define(spec)
+        spec.expose_inputs(PwBaseWorkChain, namespace='prepro',
+            exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
+            namespace_options={'help': 'Inputs for the `PwBaseWorkChain` for running the scf on host lattice.'})
+        
+        spec.input('clean_workdir', valid_type=orm.Bool,
+            help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
+        spec.input('distance', valid_type=orm.Float,
+            help='The minimum image distance as a float, the cell created will not have any periodic image below this distance.')
+        spec.input('element_to_remove', valid_type=orm.Str,
+            help='The element that will become the pinball, typically Lithium.')
+        spec.input('stash_directory', valid_type=orm.Str, required=False,
+            help='The location where host lattice charge denisites will be stored.')
         spec.input('structure', valid_type=orm.StructureData, required=True,
         help='The primitive structure that is used to build the supercell for MD simulations.')
-        spec.input('input_parameters', valid_type=orm.Dict, required=False,
-        help='This is a dictionary containing the builder parameters to be used in the host lattice scf run')
-        spec.inputs['input_parameters'].default = lambda: orm.Dict(dict={
-            'distance': 8,
-            'element_to_remove': 'Li',
-            'k_points':'automatic',
-            'code': 'pw_pinball_5.2',
-            'walltime': 14400,
-            'num_cores_per_mpiproc': 8,
-            'num_machines': 1, 
-            'stash_directory':'/home/tthakur/git/diffusion/pinball_example/charge_densities/'})
 
         spec.outline(
-            cls.supercell, cls.scf_run,
-            if_(cls.inspect_scf_run)(cls.stash_output), 
-            cls.result)
+            cls.supercell, cls.setup, cls.run_scf,
+            cls.inspect_scf, cls.result)
 
         spec.output('pinball_supercell', valid_type=orm.StructureData,
         help='The Pinball/Flipper compatible structure onto which MD will be run.')
@@ -96,92 +98,120 @@ class PreProcessWorkChain(WorkChain):
 
         spec.exit_code(611, 'ERROR_SCF_FINISHED_WITH_ERROR',
             message='Host Lattice pw scf calculation finished but with some error code.')
-        spec.exit_code(612, 'ERROR_SCF_DID_NOT_FINISH', 
+        spec.exit_code(612, 'ERROR_SCF_FAILED', 
             message='Host Lattice pw scf calculation did not finish.')
         spec.exit_code(613, 'ERROR_KPOINTS_NOT_SPECIFIED', 
             message='Only gamma or automatic kpoints argument is allowed.')
 
     def supercell(self):
-        ## Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
-        supercell_parameters_d = self.inputs['input_parameters'].get_dict()
-        sc_struct = make_supercell(self.inputs.structure, orm.Int(supercell_parameters_d['distance']))
-        self.ctx.supercell = delithiate_structure(sc_struct, orm.Str(supercell_parameters_d['element_to_remove']))
+        # Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
+        sc_struct = make_supercell(self.inputs.structure, self.inputs.distance)
+        self.ctx.supercell = delithiate_structure(sc_struct, self.inputs.element_to_remove)
 
-    def scf_run(self):
-        ## Run an scf calculation by launching the PwBaseWorkChain
+    def setup(self):
+        """Input validation and context setup."""
 
-        from aiida_quantumespresso.common.types import ElectronicType
-        from aiida.common.datastructures import StashMode
+        # I store all the input dictionaries in context variables
+        self.ctx.preprocess_inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace='prepro'))
+        self.ctx.preprocess_inputs.pw.parameters = self.ctx.preprocess_inputs.pw.parameters.get_dict()
+        self.ctx.preprocess_inputs.pw.settings = self.ctx.preprocess_inputs.pw.settings.get_dict()
+        if not self.ctx.preprocess_inputs.pw.settings['gamma_only']: 
+            return self.exit_codes.ERROR_KPOINTS_NOT_SPECIFIED
         
-        builder_parameters_d = self.inputs['input_parameters'].get_dict()
+    @classmethod
+    def get_protocol_filepath(cls):
+        """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
+        from importlib_resources import files
+        from aiida_flipper.workflows import protocols as proto
+        return files(proto) / 'preprocess.yaml'
+
+    @classmethod
+    def get_builder_from_protocol(
+        cls, code, structure, stash_directory=None, protocol=None, overrides=None, **kwargs
+    ):
+        """Return a builder prepopulated with inputs selected according to the chosen protocol.
+
+        :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
+        :param structure: the ``StructureData`` instance to use.
+        :param protocol: protocol to use, if not specified, the default will be used.
+        :param overrides: optional dictionary of inputs to override the defaults of the protocol.
+        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
+            sub processes that are called by this workchain.
+        :return: a process builder instance with all inputs defined ready for launch.
+        """
+        inputs = cls.get_protocol_inputs(protocol, overrides)
+
+        sc_struct = make_supercell(structure, inputs['distance'])
+        supercell = delithiate_structure(sc_struct, inputs['element_to_remove'])
+
+        args = (code, structure, protocol)
         PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-        builder = PwBaseWorkChain.get_builder_from_protocol(code=orm.load_code(builder_parameters_d['code']),
-            structure=self.ctx.supercell['delithiated_structure'],
-            electronic_type=ElectronicType.INSULATOR,
-            # could change the pseudo family here or make this part of the input dictionary
-            overrides={'pseudo_family': 'SSSP/1.1.2/PBEsol/efficiency'})
+        prepro = PwBaseWorkChain.get_builder_from_protocol(*args, 
+        electronic_type=ElectronicType.INSULATOR, overrides=inputs['prepro'], **kwargs)
 
-        ## the prefix has to be same for all calculations
-        # builder['pw']['parameters']['CONTROL'].update({'prefix': 'aiida'})
-        # builder.pw.metadata['options']['account'] = 's1073'
-        builder['pw']['metadata']['options']['max_wallclock_seconds'] = builder_parameters_d['walltime']
-        builder['pw']['parameters']['SYSTEM']['tot_charge'] = float(-self.ctx.supercell['delithiated_structure'].attributes['missing_Li'])
-        builder['pw']['parameters']['SYSTEM']['nosym'] = True
-
-        # following is equivalent to the command #SBATCH --ntasks-per-node=
-        builder['pw']['metadata']['options']['resources']['num_mpiprocs_per_machine'] = 1
-        # following is equivalent to the command #SBATCH --cpus-per-task=
-        builder.pw.metadata['options']['resources']['num_cores_per_mpiproc'] = builder_parameters_d['num_cores_per_mpiproc']
-        builder.pw.metadata['options']['resources']['num_machines'] = builder_parameters_d['num_machines']
-        # to save the output folder on a non-scratch partition
-        builder['pw']['metadata']['options'] = {'stash': {'source_list': ['out', 'aiida.in', 'aiida.out'], 
-                                                        'target_base': builder_parameters_d['stash_directory'], 
-                                                        'stash_mode': StashMode.COPY.value}}
-        # no. of cores used = tot_num_mpi_procs*num_cores_per_mpiproc, which is independent of the no. of cores requested
-
-        if builder_parameters_d['k_points'] == 'gamma':
-            # !! for some reason using gamma k-points doesn't work !! #
-            builder['pw'].settings = orm.Dict(dict={'gamma_only': True})
-            kpoints = orm.KpointsData()
-            kpoints.set_kpoints_mesh([1,1,1])
-            builder.kpoints = kpoints
-        elif builder_parameters_d['k_points'] == 'automatic': pass
-        else: return self.exit_codes.ERROR_KPOINTS_NOT_SPECIFIED
+        prepro['pw'].pop('structure', None)
+        prepro.pop('clean_workdir', None)
         
-        builder.clean_workdir = orm.Bool(False)
-        builder.max_iterations = orm.Int(1)
-        
-        scf_workchain_node = self.submit(builder)
-        return ToContext(add_node=scf_workchain_node)
+        if stash_directory: stash = stash_directory
+        else: stash = orm.Str(inputs['stash_directory'])
 
-    def inspect_scf_run(self):
-        ## Check if the scf finished properly, and return True if yes
+        prepro['pw']['metadata']['options'].update({'stash': {'source_list': ['out', 'aiida.in', 'aiida.out'], 
+                                                        'target_base': stash.value, 
+                                                        'stash_mode': StashMode.COPY.value}})
+        prepro['pw']['parameters']['SYSTEM']['tot_charge'] = float(-supercell['delithiated_structure'].attributes['missing_Li'])
 
-        status = self.ctx.add_node.attributes['process_state']
-        exit_status = self.ctx.add_node.attributes['exit_status']
+        # removing the Li upf data because the input structure of this builder is unitcell with Li, while the input structure of PwBaseWorkChain is delithiated supercell
+        prepro['pw']['pseudos'].pop('Li', None)
 
-        if status=='finished' and exit_status==0:
-            self.ctx.scf_run_success = True
-            return self.ctx.scf_run_success
-        elif status=='finished' and exit_status!=0:
-            self.ctx.scf_run_success = False
-            self.report('Host Lattice scf finished but with some error code.')
+        if 'settings' in inputs['prepro']['pw']:
+            prepro['pw'].settings = orm.Dict(dict=inputs['prepro']['pw']['settings'])
+            if inputs['prepro']['pw']['settings']['gamma_only']:
+                kpoints = orm.KpointsData()
+                kpoints.set_kpoints_mesh([1,1,1])
+                prepro.kpoints = kpoints
+            else: 
+                raise NotImplementedError('Only gamma k-points possible in flipper calculations, so it is recommended to use the same in host lattice calculation.')
+
+        builder = cls.get_builder()
+        builder.prepro = prepro
+        builder.structure = structure
+        builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
+        builder.distance = orm.Float(inputs['distance'])
+        builder.element_to_remove = orm.Str(inputs['element_to_remove'])
+
+        return builder
+
+    def run_scf(self):
+
+        inputs = self.ctx.preprocess_inputs
+        inputs.pw.structure = self.ctx.supercell['delithiated_structure']
+        inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
+        running = self.submit(PwBaseWorkChain, **inputs)
+
+        self.report(f'launching PwBaseWorkChain<{running.pk}>')
+
+        return ToContext(add_node=running)
+    
+    def inspect_scf(self):
+        # Check if the scf finished properly, and stash the charge densities
+
+        workchain = self.ctx.add_node
+
+        if workchain.is_excepted or workchain.is_killed:
+            self.report('Host Lattice scf was excepted or killed')
+            return self.exit_codes.ERROR_SCF_FAILED
+
+        if workchain.is_failed:
+            self.report(f'Host Lattice scf failed with exit status {workchain.exit_status}')
+            return self.exit_codes.ERROR_SCF_FAILED
+
+        try:
+            stashed_folder_data = workchain.outputs.remote_stash
+            self.ctx.stashed_data = orm.RemoteData(remote_path=stashed_folder_data.attributes['target_basepath'], computer=stashed_folder_data.computer)
+        except exceptions.NotExistent:
+            self.report(f'Host Lattice scf finished with exit status {workchain.exit_status}, but stashed directories not found.')
             return self.exit_codes.ERROR_SCF_FINISHED_WITH_ERROR
-        else:
-            self.ctx.scf_run_success = False
-            self.report('Host Lattice scf did not finish.')
-            return self.exit_codes.ERROR_SCF_DID_NOT_FINISH
-
-    def stash_output(self):
-        ## Converting the stashed folder to RemoteData for future use
-        qb = orm.QueryBuilder()
-        qb.append(WorkflowFactory('quantumespresso.pw.base'), filters={'id': {'==':self.ctx.add_node.pk}}, tag='pw')
-        qb.append(orm.RemoteStashFolderData, with_incoming='pw')
-        stashed_folder_data, = qb.first()
-        self.ctx.stashed_output_folder = orm.RemoteData(remote_path=stashed_folder_data.attributes['target_basepath'], computer=stashed_folder_data.computer)
 
     def result(self):
-        if self.ctx.scf_run_success:
-            self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
-            self.out('host_lattice_scf_output', self.ctx.stashed_output_folder)
-
+        self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
+        self.out('host_lattice_scf_output', self.ctx.stashed_data)

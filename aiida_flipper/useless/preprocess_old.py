@@ -3,7 +3,6 @@
 from aiida import orm
 from aiida.engine.processes.functions import calcfunction
 from aiida.engine.processes.workchains.workchain import WorkChain
-from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida.plugins import WorkflowFactory
 from aiida.engine import ToContext, if_, ExitCode
@@ -60,7 +59,7 @@ def delithiate_structure(structure, element_to_remove):
     return dict(pinball_structure=pinball_structure, delithiated_structure=delithiated_structure)
 
 
-class PreProcessWorkChain(ProtocolMixin, WorkChain):
+class PreProcessWorkChain(WorkChain):
     """
     WorkChain that takes a primitive structure as its input and makes supercell using Supercellor class,
     makes the pinball and delithiated structures and then performs an scf calculation on the host lattice,
@@ -71,33 +70,19 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
     @classmethod
     def define(cls, spec):
         super().define(spec)
-        spec.expose_inputs(PwBaseWorkChain, namespace='base',
-            exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
-            namespace_options={'help': 'Inputs for the `PwBaseWorkChain` for the main relax loop.'})
-        spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(True),
-            help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
-        spec.input('distance', valid_type=float, default=lambda: 8,
-            help='The minimum image distance as a float, the cell created will not have any periodic image below this distance.')
-        spec.input('element_to_remove', valid_type=str, default=lambda: 'Li',
-            help='The element that will become the pinball, typically Lithium.')
-        spec.input('k_points', valid_type=str, default=lambda: 'gamma',
-            help='K-points option of QE, pinball MD can only use gamma.')
-        spec.input('stash_directory', valid_type=str, default=lambda: '/home/tthakur/git/diffusion/pinball_example/charge_densities/',
-            help='The location where host lattice charge denisites will be stored.')
-        
         spec.input('structure', valid_type=orm.StructureData, required=True,
         help='The primitive structure that is used to build the supercell for MD simulations.')
-
         spec.input('input_parameters', valid_type=orm.Dict, required=False,
         help='This is a dictionary containing the builder parameters to be used in the host lattice scf run')
         spec.inputs['input_parameters'].default = lambda: orm.Dict(dict={
             'distance': 8,
             'element_to_remove': 'Li',
-            'k_points':'automatic',
-            'code': 'pw_pinball_5.2',
-            'walltime': 14400,
-            'num_cores_per_mpiproc': 8,
-            'num_machines': 1, 
+            'k_points':'gamma',
+            'code': 'pw-qe-5.2-pinball',
+            'walltime': 1800,
+            'num_cores_per_mpiproc': 16,
+            'num_mpiprocs_per_machine': 8,
+            'num_machines': 1,
             'stash_directory':'/home/tthakur/git/diffusion/pinball_example/charge_densities/'})
 
         spec.outline(
@@ -119,65 +104,10 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
     def supercell(self):
         ## Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
-        sc_struct = make_supercell(self.inputs.structure, orm.Float(self.inputs.distance))
-        self.ctx.supercell = delithiate_structure(sc_struct, orm.Str(self.inputs.element_to_remove))
+        supercell_parameters_d = self.inputs['input_parameters'].get_dict()
+        sc_struct = make_supercell(self.inputs.structure, orm.Int(supercell_parameters_d['distance']))
+        self.ctx.supercell = delithiate_structure(sc_struct, orm.Str(supercell_parameters_d['element_to_remove']))
 
-
-    @classmethod
-    def get_builder_from_protocol(
-        cls, code, protocol=None, overrides=None, **kwargs
-    ):
-        """Return a builder prepopulated with inputs selected according to the chosen protocol.
-
-        :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
-        :param structure: the ``StructureData`` instance to use.
-        :param protocol: protocol to use, if not specified, the default will be used.
-        :param overrides: optional dictionary of inputs to override the defaults of the protocol.
-        :param k_points: the k_points to use: only automatic and gamma type allowed, with pinballMD only allowing gamma.
-        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
-            sub processes that are called by this workchain.
-        :return: a process builder instance with all inputs defined ready for launch.
-        """
-        from aiida_quantumespresso.common.types import ElectronicType
-        from aiida.common.datastructures import StashMode
-
-        structure = self.ctx.supercell['delithiated_structure']
-
-        inputs = cls.get_protocol_inputs(protocol, overrides)
-
-        args = (code, structure, protocol)
-        PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-        base = PwBaseWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs.get('base', None), **kwargs)
-
-        base['pw'].pop('structure', None)
-        base.pop('clean_workdir', None)
-
-        builder = cls.get_builder()
-        builder.base = base
-        builder.structure = structure
-        builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
-        builder['base']['pw']['metadata']['options'] = {'stash': {'source_list': ['out', 'aiida.in', 'aiida.out'], 
-                                                        'target_base': self.inputs.stash_directory, 
-                                                        'stash_mode': StashMode.COPY.value}}
-
-        builder['base']['pw']['parameters']['SYSTEM']['tot_charge'] = float(-self.ctx.supercell['delithiated_structure'].attributes['missing_Li'])
-        builder['base']['pw']['parameters']['SYSTEM']['nosym'] = True
-
-        if self.inputs.k_points == 'gamma':
-            builder['base']['pw'].settings = orm.Dict(dict={'gamma_only': True})
-            kpoints = orm.KpointsData()
-            kpoints.set_kpoints_mesh([1,1,1])
-            builder['base'].kpoints = kpoints
-        elif self.inputs.k_points == 'automatic': pass
-        else: return self.exit_codes.ERROR_KPOINTS_NOT_SPECIFIED
-
-        return builder
-
-    def scf_run(self):
-
-        scf_workchain_node = self.submit(builder)
-        return ToContext(add_node=scf_workchain_node)
-    
     def scf_run(self):
         ## Run an scf calculation by launching the PwBaseWorkChain
 
@@ -192,15 +122,13 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
             # could change the pseudo family here or make this part of the input dictionary
             overrides={'pseudo_family': 'SSSP/1.1.2/PBEsol/efficiency'})
 
-        ## the prefix has to be same for all calculations
-        # builder['pw']['parameters']['CONTROL'].update({'prefix': 'aiida'})
         # builder.pw.metadata['options']['account'] = 's1073'
-        builder['pw']['metadata']['options']['max_wallclock_seconds'] = builder_parameters_d['walltime']
+        builder['pw']['metadata']['options'].update({'max_wallclock_seconds': builder_parameters_d['walltime']})
         builder['pw']['parameters']['SYSTEM']['tot_charge'] = float(-self.ctx.supercell['delithiated_structure'].attributes['missing_Li'])
         builder['pw']['parameters']['SYSTEM']['nosym'] = True
 
         # following is equivalent to the command #SBATCH --ntasks-per-node=
-        builder['pw']['metadata']['options']['resources']['num_mpiprocs_per_machine'] = 1
+        builder['pw']['metadata']['options']['resources']['num_mpiprocs_per_machine'] = builder_parameters_d['num_mpiprocs_per_machine']
         # following is equivalent to the command #SBATCH --cpus-per-task=
         builder.pw.metadata['options']['resources']['num_cores_per_mpiproc'] = builder_parameters_d['num_cores_per_mpiproc']
         builder.pw.metadata['options']['resources']['num_machines'] = builder_parameters_d['num_machines']
@@ -211,6 +139,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         # no. of cores used = tot_num_mpi_procs*num_cores_per_mpiproc, which is independent of the no. of cores requested
 
         if builder_parameters_d['k_points'] == 'gamma':
+            # !! for some reason using gamma k-points doesn't work !! #
             builder['pw'].settings = orm.Dict(dict={'gamma_only': True})
             kpoints = orm.KpointsData()
             kpoints.set_kpoints_mesh([1,1,1])
@@ -223,7 +152,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         
         scf_workchain_node = self.submit(builder)
         return ToContext(add_node=scf_workchain_node)
-    
+
     def inspect_scf_run(self):
         ## Check if the scf finished properly, and return True if yes
 

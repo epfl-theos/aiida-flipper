@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Workchain to call MD workchains using Quantum ESPRESSO pw.x."""
-from aiida_flipper.workflows.replaymd import ReplayMDWorkChain
+from samos.trajectory import Trajectory
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
 from aiida.engine import BaseRestartWorkChain, WorkChain, ToContext, if_, while_, append_
@@ -11,7 +11,7 @@ from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
 from aiida_flipper.utils.utils import get_or_create_input_node
 
-PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
+ReplayMDWorkChain = WorkflowFactory('quantumespresso.flipper.replaymd')
 
 def get_trajectories_dict(calc_list):
     """
@@ -34,35 +34,39 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
             namespace_options={'help': 'Inputs for the `ReplayMDWorkChain` for MD runs are called in the `md` namespace.'})
         spec.input('structure', valid_type=orm.StructureData, help='The input unitcell structure and not the supercell.')
+        spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
+            help='The stashed directory containing charge densities of host lattice.')
         # spec.input('code', valid_type=orm.Code, help='The code used to run the calculations.')
-        spec.input('max_md_convergence_iterations', valid_type=orm.Int, default=lambda: orm.Int(6),
+        spec.input('max_md_convergence_iterations', valid_type=orm.Int,
             help='The maximum number of MD runs that will be called by this workchain.')
-        spec.input('min_md_convergence_iterations', valid_type=orm.Int, default=lambda: orm.Int(3),
+        spec.input('min_md_convergence_iterations', valid_type=orm.Int,
             help='The minimum number of MD runs that will be called by this workchain even if diffusion coefficient has converged.')
         spec.input('diffusion_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the threshold values for diffusion convergence.')
-        spec.inputs['diffusion_parameters'].default = lambda: orm.Dict(dict={
-            'sem_threshold': 1.e-5,
-            'sem_relative_threshold': 1.e-2})
+        # spec.inputs['diffusion_parameters'].default = lambda: orm.Dict(dict={
+        #     'sem_threshold': 1.e-5,
+        #     'sem_relative_threshold': 1.e-2})
         spec.input('msd_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the parameters required for MSD computation by Samos.')
-        spec.inputs['msd_parameters'].default = lambda: orm.Dict(dict={
-            'equilibration_time_fs': 1.e6,
-            'species_of_interest': 'Li',
-            'stepsize_t' : 1,
-            'stepsize_tau' : 1,
-            'nr_of_blocks' : 1,
-            't_start_fit_dt' : 10,
-            't_end_fit_dt' : 1.e9,
-            't_long_factor' : 1,
-            'do_com' : False,
-            'decomposed' : False,
-            'verbosity' : 0})
+        # spec.inputs['msd_parameters'].default = lambda: orm.Dict(dict={
+        #     'equilibration_time_fs': 5.e6,
+        #     'species_of_interest': 'Li',
+        #     'stepsize_t' : 1,
+        #     'stepsize_tau' : 1,
+        #     'nr_of_blocks' : 1,
+        #     't_start_dt' : 0,
+        #     't_end_dt' : 1.e4,
+        #     't_start_fit_dt' : 1.e5,
+        #     't_end_fit_dt' : 3.e5,
+        #     't_long_factor' : 1,
+        #     'do_com' : False,
+        #     'decomposed' : False,
+        #     'verbosity' : 0})
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
         spec.outline(
             cls.setup,
-            while_(cls.should_run_replay)(
-                cls.run_replay,
-                cls.inspect_replay,
+            while_(cls.should_run_process)(
+                cls.run_process,
+                cls.inspect_process,
             ),
             cls.results,
         )
@@ -71,9 +75,13 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.exit_code(702, 'ERROR_DIFFUSION_NOT_CONVERGED',
             message='The calculation reached the maximum no. of MD steps, but the diffusion coefficient stil did not converge.')
         spec.exit_code(703, 'ERROR_CHARGE_DENSITIES_NOT_FOUND',
-            message='Either the stashed charge densities or the flipper compatible supercell structure not found.') 
+            message='Either the stashed charge densities or the flipper compatible supercell structure not found.')
+        spec.exit_code(704, 'ERROR_SUB_PROCESS_FAILED_MD',
+            message='The ReplayMDWorkChain sub process failed.')
         # spec.expose_outputs(ReplayMDWorkChain)
-        spec.output('output_parameters', valid_type=orm.Dict,
+        spec.output('total_trajectory', valid_type=orm.TrajectoryData,
+            help='The full concatenated trajectory of all called ReplayMDWorkChains.')
+        spec.output('msd_results', valid_type=orm.ArrayData,
             help='The `output_parameters` output node of the successful calculation.')
 
     def setup(self):
@@ -81,27 +89,24 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         self.ctx.converged = False
         self.ctx.replay_counter = 0
-        self.ctx.is_finished = False
 
-        # Querying the charge densities and flipper compatible structure
+        # I store the flipper/pinball compatible structure as current_structure
         qb = orm.QueryBuilder()
         qb.append(orm.StructureData, filters={'id':{'==':self.inputs.structure.pk}}, tag='struct')
         qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        try:
-            qb.append(orm.RemoteData, with_incoming='prepro')
-            self.ctx.stashed_folder, = qb.first()
-            qb.append(orm.StructureData, with_incoming='prepro')
-            self.ctx.current_structure, = qb.first()
-        except exceptions.NotExistent:
-            return self.exit_codes.ERROR_CHARGE_DENSITIES_NOT_FOUND
+        # no need to check if supercell structure exists, already checked by builder
+        qb.append(orm.StructureData, with_incoming='prepro')
+        self.ctx.current_structure = qb.all(flat=True)[-1]
 
-        # I can add the builder options here in ctx form, if need be
-
+        # I store all the input dictionaries in context variables
         self.ctx.replay_inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, namespace='md'))
         self.ctx.replay_inputs.pw.parameters = self.ctx.replay_inputs.pw.parameters.get_dict()
-        self.ctx.replay_inputs.pw['parent_folder'] = self.ctx.stashed_folder
-        self.ctx.replay_inputs.pw.setdefault('settings', {})
-        # to store the pk of all ReplayMDWorkChains called by this workchain, to help in querying of all TrajectoryData
+        self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
+        # self.ctx.replay_inputs.pw['parent_folder'] = self.inputs.parent_folder
+        self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
+        self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
+
+        # to store the pk of all ReplayMDWorkChains called by this workchain to help in querying of all TrajectoryData
         self.ctx.last_calc_list = [] 
    
     @classmethod
@@ -113,7 +118,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, nstep=None, protocol=None, overrides=None, **kwargs
+        cls, code, structure, protocol=None, overrides=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
@@ -128,46 +133,58 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         from aiida_quantumespresso.common.types import ElectronicType
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        args = (code, structure, protocol)
+        qb = orm.QueryBuilder()
+        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        try:
+            qb.append(orm.RemoteData, with_incoming='prepro')
+            stashed_folder = qb.all(flat=True)[-1]
+            qb.append(orm.StructureData, with_incoming='prepro')
+            current_structure = qb.all(flat=True)[-1]
+        except exceptions.NotExistent:
+            raise ValueError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+
+        args = (code, structure, stashed_folder, protocol)
         replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
         replay.pop('clean_workdir', None)
-        if nstep: replay['nstep'] = nstep
-        # setting 0 k-points for gamma option
-        kpoints = orm.KpointsData()
-        kpoints.set_kpoints_mesh([1,1,1])
-        replay.kpoints = kpoints
+        replay['pw'].pop('parent_folder', None)
 
         builder = cls.get_builder()
         builder.md = replay
 
         builder.structure = structure
+        builder.parent_folder = stashed_folder
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.max_md_convergence_iterations = orm.Int(inputs['max_md_convergence_iterations'])
+        builder.min_md_convergence_iterations = orm.Int(inputs['min_md_convergence_iterations'])
+        builder.diffusion_parameters = orm.Dict(dict=inputs['diffusion_parameters'])
+        builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
 
         return builder
 
-    def should_run_replay(self):
+    def should_run_process(self):
         """Return whether a relaxation workchain should be run.
 
         This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
         """
-        if (self.inputs.min_md_convergence_iterations >= self.ctx.replay_counter): return True
-        elif (not(self.ctx.converged) or (self.inputs.max_md_convergence_iterations <= self.ctx.replay_counter)): return True
+        if (self.inputs.min_md_convergence_iterations.value >= self.ctx.replay_counter): return True
+        elif (not(self.ctx.converged) or (self.inputs.max_md_convergence_iterations.value <= self.ctx.replay_counter)): return True
         else: return False
 
-    def run_replay(self):
-        """Run the `ReplayMDWorkChain` to run a `FlipperCalculation`."""
+    def run_process(self):
+        """Run the `ReplayMDWorkChain` to launch a `FlipperCalculation`."""
 
-        #Maybe get_builder_from_protocol() is not callable here??
+        inputs = self.ctx.replay_inputs
+        inputs.pw['parent_folder'] = self.inputs.parent_folder
 
         if (self.ctx.replay_counter == 0):
-            # if this is first run, then we do a simple thermalising run which is essentially launching the same ReplayMDWorkChain
-            builder = LinDiffusionWorkChain.get_builder_from_protocol(code=self.inputs.code, structure=self.ctx.current_structure, nstep=100000)
+            # if this is first run, then I launch an unmodified ReplayMDWorkChain
+            inputs.pw['structure'] = self.ctx.current_structure
 
         else:
-            # for every run after thermalisation, the velocities are read from the trajectory of previous MD run
+            # for every run after the first one, the velocities and positions (which make the new structure) are read from the trajectory of previous MD run
             # if trajectory and structure have different shapes (i.e. for pinball level 1 calculation only pinball positions are printed:)
             create_missing = len(self.ctx.current_structure.sites) != self.ctx.last_calc.outputs.total_trajectory.get_attribute('array|positions')[1]
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
@@ -176,23 +193,25 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
                             step_index=-1,
                             recenter=False,
                             create_settings=True,
-                            complete_missing=create_missing), store=True),)
+                            complete_missing=create_missing), store=False),)
             if create_missing:
                 kwargs['structure'] = self.ctx.current_structure
-                kwargs['settings'] = get_or_create_input_node(orm.Dict, dict(gamma_only=True), store=True)
-
+                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.replay_inputs.pw.settings, store=False)
 
             res = get_structure_from_trajectory(**kwargs)
             
-            builder = LinDiffusionWorkChain.get_builder_from_protocol(code=self.inputs.code, structure=res['structure'], stashed_folder=self.ctx.stashed_folder, nstep=1000000)
-            builder.pw['parameters']['IONS'].update({'ion_velocities': 'from_input'})
-            builder.pw['settings'] = res['settings']
+            inputs.pw['structure'] = res['structure']
+            self.ctx.current_structure = res['structure']
+            inputs.pw['parameters']['IONS'].update({'ion_velocities': 'from_input'})
+            inputs.pw['settings'].set_dict(res['settings'])
         
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = f'replay_{self.ctx.replay_counter:02d}'
-        builder['md']['pw']['parent_folder'] = self.ctx.stashed_folder
-        builder['metadata']['label']=f'replay_{self.ctx.replay_counter}'
-        running = self.submit(builder)
+        inputs.metadata.label = f'replay_{self.ctx.replay_counter:02d}'
+
+        inputs = prepare_process_inputs(ReplayMDWorkChain, inputs)
+        running = self.submit(ReplayMDWorkChain, **inputs)
+
         self.ctx.last_calc = running
         self.ctx.last_calc_list.append(running.pk)
         self.ctx.replay_counter +=1
@@ -200,73 +219,50 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         
         return ToContext(workchains=append_(running))
 
-    def inspect_replay(self):
-        """Inspect the results of the last `PwBaseWorkChain`.
+    def inspect_process(self):
+        """Inspect the results of the last `ReplayMDWorkChain`.
 
-        Compare the cell volume of the relaxed structure of the last completed workchain with the previous. If the
-        difference ratio is less than the volume convergence threshold we consider the cell relaxation converged.
+        I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
         """
-        concatenated_trajectory = concatenate_trajectory(**get_trajectories_dict(self.ctx.last_calc_list), remove_repeated_last_step=True)['concatenated_trajectory']
-
-        
         workchain = self.ctx.workchains[-1]
+        print('/n', self.ctx.last_calc)
+        print('/n', workchain)
+        print('/n', self.ctx.last_calc_list)
 
-        acceptable_statuses = ['ERROR_IONIC_CONVERGENCE_REACHED_EXCEPT_IN_FINAL_SCF']
+        # Maybe add some acceptable failed status in future?
+        # acceptable_statuses = ['ERROR_IONIC_CONVERGENCE_REACHED_EXCEPT_IN_FINAL_SCF']
 
         if workchain.is_excepted or workchain.is_killed:
-            self.report('relax PwBaseWorkChain was excepted or killed')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_RELAX
+            self.report('called ReplayMDWorkChain was excepted or killed')
+            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
-        if workchain.is_failed and workchain.exit_status not in ReplayMDWorkChain.get_exit_statuses(acceptable_statuses):
-            self.report(f'relax PwBaseWorkChain failed with exit status {workchain.exit_status}')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_RELAX
+        if workchain.is_failed: # and workchain.exit_status not in ReplayMDWorkChain.get_exit_statuses(acceptable_statuses):
+            self.report(f'called ReplayMDWorkChain failed with exit status {workchain.exit_status}')
+            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
         try:
-            structure = workchain.outputs.output_structure
+            trajectory = workchain.outputs.total_trajectory
         except exceptions.NotExistent:
-            # If the calculation is set to 'scf', this is expected, so we are done
-            if self.ctx.relax_inputs.pw.parameters['CONTROL']['calculation'] == 'scf':
-                self.ctx.is_converged = True
-                return
+            self.report('the Md run with ReplayMDWorkChain finished successfully but without output trajectory')
+            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
-            self.report('`vc-relax` or `relax` PwBaseWorkChain finished successfully but without output structure')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_RELAX
+        # Calculate MSD and check if it converged
 
-        prev_cell_volume = self.ctx.current_cell_volume
-        curr_cell_volume = structure.get_cell_volume()
-
-        # Set relaxed structure as input structure for next iteration
-        self.ctx.current_structure = structure
-        self.ctx.current_number_of_bands = workchain.outputs.output_parameters.get_dict()['number_of_bands']
-        self.report(f'after iteration {self.ctx.replay_counter} cell volume of relaxed structure is {curr_cell_volume}')
-
-        # After first iteration, simply set the cell volume and restart the next base workchain
-        if not prev_cell_volume:
-            self.ctx.current_cell_volume = curr_cell_volume
-
-            # If meta convergence is switched off we are done
-            if not self.ctx.meta_convergence:
-                self.ctx.is_converged = True
-            return
-
-        # !! somewhere here check if msd converged
-        self.ctx.is_finished = True
-
-        concat_input_d = get_trajectories_dict(last_calc_list)
+        concat_input_d = get_trajectories_dict(self.ctx.last_calc_list)
         concat_input_d.update({'remove_repeated_last_step': True})
         concatenated_trajectory = concatenate_trajectory(**concat_input_d)['concatenated_trajectory']
 
-        #store following as context variables to be later used in results
-
         msd_results = get_diffusion_from_msd(
-                structure=pinball_struct,
-                parameters=get_or_create_input_node(orm.Dict, msd_parameters, store=False),
+                structure=self.ctx.current_structure,
+                parameters=get_or_create_input_node(orm.Dict, self.ctx.msd_parameters_d, store=False),
                 trajectory=concatenated_trajectory)
-        sem = msd_results.attributes['{}'.format(msd_parameters['species_of_interest'][0])]['diffusion_sem_cm2_s']
-        mean_d = msd_results.attributes['{}'.format(msd_parameters['species_of_interest'][0])]['diffusion_mean_cm2_s']
+        sem = msd_results.attributes['{}'.format(self.ctx.msd_parameters_d['species_of_interest'][0])]['diffusion_sem_cm2_s']
+        mean_d = msd_results.attributes['{}'.format(self.ctx.msd_parameters_d['species_of_interest'][0])]['diffusion_mean_cm2_s']
         sem_relative = sem / mean_d
-        sem_target = diffusion_parameters['sem_threshold']
-        sem_relative_target = diffusion_parameters['sem_relative_threshold']
+        sem_target = self.ctx.diffusion_parameters_d['sem_threshold']
+        sem_relative_target = self.ctx.diffusion_parameters_d['sem_relative_threshold']
+
+        self.report(f'after iteration {self.ctx.replay_counter} mean msd is {mean_d}')
 
         if (mean_d < 0.):
             # the diffusion is negative: means that the value is not converged enough yet
@@ -286,46 +282,21 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             self.report('relative sem: {:.5e}  Target: {:.5e}'.format(sem_relative, sem_relative_target))
             self.ctx.converged = False
 
-
-        # Check whether the cell volume is converged
-        volume_threshold = self.inputs.diffusion_parameters.value
-        volume_difference = abs(prev_cell_volume - curr_cell_volume) / prev_cell_volume
-
-        if volume_difference < volume_threshold:
-            self.ctx.is_converged = True
-            self.report(
-                'relative cell volume difference {} smaller than convergence threshold {}'.format(
-                    volume_difference, volume_threshold
-                )
-            )
-        else:
-            self.report(
-                'current relative cell volume difference {} larger than convergence threshold {}'.format(
-                    volume_difference, volume_threshold
-                )
-            )
-
-        self.ctx.current_cell_volume = curr_cell_volume
-
+        #storing following as context variables to be later used in results, without recalculation
+        self.ctx.msd_results = msd_results
+        self.ctx.concatenated_trajectory = concatenated_trajectory
+        
         return
 
     def results(self):
-        """Attach the output parameters and structure of the last workchain to the outputs."""
-        if self.ctx.is_converged and self.ctx.replay_counter <= self.inputs.max_md_convergence_iterations.value:
+        """Attach the output parameters and combined trajectories of all called ReplayMDWorkChains to the outputs."""
+        if self.ctx.converged and self.ctx.replay_counter <= self.ctx.max_md_convergence_iterations:
             self.report(f'workchain completed after {self.ctx.replay_counter} iterations')
         else:
-            self.report('maximum number of meta convergence iterations exceeded')
+            self.report('maximum number of MD convergence iterations exceeded')
 
-        # Get the latest relax workchain and pass the outputs
-        final_relax_workchain = self.ctx.workchains[-1]
-
-        if self.ctx.relax_inputs.pw.parameters['CONTROL']['calculation'] != 'scf':
-            self.out('output_structure', final_relax_workchain.outputs.output_structure)
-
-        try:
-            self.out_many(self.exposed_outputs(self.ctx.workchain_scf, ReplayMDWorkChain))
-        except AttributeError:
-            self.out_many(self.exposed_outputs(final_relax_workchain, ReplayMDWorkChain))
+        self.out('msd_results', self.ctx.msd_results)
+        self.out('total_trajectory', self.ctx.concatenated_trajectory)
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""

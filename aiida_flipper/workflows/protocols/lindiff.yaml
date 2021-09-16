@@ -2,9 +2,27 @@ default_inputs:
     clean_workdir: False
     max_md_convergence_iterations: 5
     min_md_convergence_iterations: 3
+    diffusion_parameters:
+        'sem_threshold': 1.e-5
+        'sem_relative_threshold': 1.e-2
+    msd_parameters:
+        'equilibration_time_fs': 5.e+6
+        'species_of_interest': 'Li'
+        'stepsize_t' : 1
+        'stepsize_tau' : 1
+        'nr_of_blocks' : 1
+        't_start_dt' : 0
+        't_end_dt' : 1.e+4
+        't_start_fit_dt' : 1.e+5
+        't_end_fit_dt' : 3.e+5
+        't_long_factor' : 1
+        'do_com' : False
+        'decomposed' : False
+        'verbosity' : 0
     metadata:
         label: 'replay_'
     md:
+        nstep: 1.e+6
         pw:
             settings:
                 gamma_only: True

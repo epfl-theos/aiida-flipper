@@ -212,6 +212,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         structure,
         stashed_folder,
         nstep=None,
+        total_energy_max_fluctuation=None,
         protocol=None,
         overrides=None,
         electronic_type=ElectronicType.INSULATOR,
@@ -311,7 +312,11 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         builder['pw']['parent_folder'] = stashed_folder
         if nstep: builder['nstep'] = nstep
-        else: builder['nstep'] = orm.Int(inputs['nstep'])    
+        else: builder['nstep'] = orm.Int(inputs['nstep'])
+        if total_energy_max_fluctuation: 
+            builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
+        else: 
+            builder['total_energy_max_fluctuation'] = orm.Float(inputs['total_energy_max_fluctuation'])  
 
         # pylint: enable=no-member
         return builder

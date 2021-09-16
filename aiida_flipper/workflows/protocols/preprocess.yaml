@@ -1,0 +1,62 @@
+default_inputs:
+    clean_workdir: True
+    distance: 8.
+    element_to_remove: 'Li'
+    stash_directory: '/store/marvel/mr0/tthakur/charge_densities/' # common directory
+    prepro:
+        kpoints_distance: 0.15
+        kpoints_force_parity: False
+        meta_parameters:
+            conv_thr_per_atom: 0.2e-9
+            etot_conv_thr_per_atom: 1.e-5
+        pseudo_family: 'SSSP/1.1.2/PBEsol/efficiency'
+        pw:
+            settings:
+                gamma_only: True
+            metadata:
+                options:
+                    resources: # For 128 threads in eiger
+                        num_machines: 1
+                        num_cores_per_mpiproc: 16
+                        num_mpiprocs_per_machine: 8
+                    max_wallclock_seconds: 3600  # it shouldn't take even this long
+                    withmpi: True
+            parameters:
+                CONTROL:
+                    calculation: scf
+                    forc_conv_thr: 1.e-4
+                    tprnfor: True
+                    tstress: True
+                SYSTEM:
+                    nosym: True
+                    occupations: smearing
+                    smearing: cold
+                    degauss: 0.01
+                ELECTRONS:
+                    electron_maxstep: 80
+                    mixing_beta: 0.4
+default_protocol: moderate
+protocols:
+    moderate:
+        description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
+    precise:
+        description: 'Protocol to perform the computation at high precision at higher computational cost.'
+        kpoints_distance: 0.10
+        meta_parameters:
+            conv_thr_per_atom: 0.1e-9
+            etot_conv_thr_per_atom: 0.5e-5
+        pseudo_family: 'SSSP/1.1.2/PBEsol/precision'
+        pw:
+            parameters:
+                CONTROL:
+                    forc_conv_thr: 0.5e-4
+    fast:
+        description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
+        kpoints_distance: 0.50
+        meta_parameters:
+            conv_thr_per_atom: 0.4e-9
+            etot_conv_thr_per_atom: 1.e-4
+        pw:
+            parameters:
+                CONTROL:
+                    forc_conv_thr: 1.e-3
