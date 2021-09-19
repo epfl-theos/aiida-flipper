@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Workchain to call MD workchains using Quantum ESPRESSO pw.x."""
+from aiida.engine.processes import workchains
 from samos.trajectory import Trajectory
 from aiida import orm
-from aiida.common import AttributeDict, exceptions
+from aiida.common import AttributeDict, exceptions  
 from aiida.engine import BaseRestartWorkChain, WorkChain, ToContext, if_, while_, append_
 from aiida.plugins import CalculationFactory, WorkflowFactory
 
@@ -13,12 +14,12 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDWorkChain = WorkflowFactory('quantumespresso.flipper.replaymd')
 
-def get_trajectories_dict(calc_list):
+def get_trajectories_dict(pk_list):
     """
     Returns a dictionary of the output trajectories with the calling ReplayMDWorkChain's label as the key.
     """
     qb = orm.QueryBuilder()
-    qb.append(ReplayMDWorkChain, filters={'id':{'in':calc_list}}, tag='replay', project='label')
+    qb.append(ReplayMDWorkChain, filters={'id':{'in':pk_list}}, tag='replay', project='label')
     qb.append(orm.TrajectoryData, with_incoming='replay', project='*', tag='traj')
     return {'{}'.format(item['replay']['label']):item['traj']['*'] for item in qb.iterdict()}
 
@@ -105,9 +106,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # self.ctx.replay_inputs.pw['parent_folder'] = self.inputs.parent_folder
         self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
         self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
-
-        # to store the pk of all ReplayMDWorkChains called by this workchain to help in querying of all TrajectoryData
-        self.ctx.last_calc_list = [] 
    
     @classmethod
     def get_protocol_filepath(cls):
@@ -142,7 +140,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             qb.append(orm.StructureData, with_incoming='prepro')
             current_structure = qb.all(flat=True)[-1]
         except exceptions.NotExistent:
-            raise ValueError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+            raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
 
         args = (code, structure, stashed_folder, protocol)
         replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
@@ -186,9 +184,10 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         else:
             # for every run after the first one, the velocities and positions (which make the new structure) are read from the trajectory of previous MD run
             # if trajectory and structure have different shapes (i.e. for pinball level 1 calculation only pinball positions are printed:)
-            create_missing = len(self.ctx.current_structure.sites) != self.ctx.last_calc.outputs.total_trajectory.get_attribute('array|positions')[1]
+            workchain = self.ctx.workchains[-1]
+            create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
-            kwargs = dict(trajectory=self.ctx.last_calc.outputs.total_trajectory, 
+            kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
                         parameters=get_or_create_input_node(orm.Dict, dict(
                             step_index=-1,
                             recenter=False,
@@ -212,8 +211,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         inputs = prepare_process_inputs(ReplayMDWorkChain, inputs)
         running = self.submit(ReplayMDWorkChain, **inputs)
 
-        self.ctx.last_calc = running
-        self.ctx.last_calc_list.append(running.pk)
         self.ctx.replay_counter +=1
         self.report(f'launching ReplayMDWorkChain<{running.pk}>')
         
@@ -225,9 +222,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
         """
         workchain = self.ctx.workchains[-1]
-        print('/n', self.ctx.last_calc)
-        print('/n', workchain)
-        print('/n', self.ctx.last_calc_list)
 
         # Maybe add some acceptable failed status in future?
         # acceptable_statuses = ['ERROR_IONIC_CONVERGENCE_REACHED_EXCEPT_IN_FINAL_SCF']
@@ -247,8 +241,9 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
         # Calculate MSD and check if it converged
-
-        concat_input_d = get_trajectories_dict(self.ctx.last_calc_list)
+        pk_list = []
+        for calc in workchains: pk_list.append(calc.pk)
+        concat_input_d = get_trajectories_dict(pk_list)
         concat_input_d.update({'remove_repeated_last_step': True})
         concatenated_trajectory = concatenate_trajectory(**concat_input_d)['concatenated_trajectory']
 

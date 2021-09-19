@@ -55,7 +55,7 @@ def get_total_trajectory(workchain, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
-        res = concatenate_trajectory.run_get_node(**traj_d) # check if this function is used correctly
+        res = concatenate_trajectory(**traj_d) # check if this function is used correctly
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
         # no reason to concatenate if I have only one trajectory (saves space in repository)
@@ -168,7 +168,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         spec.inputs['handler_overrides'].default = lambda: orm.Dict(dict={
             'sanity_check_insufficient_bands': False,
-            'handle_out_of_walltime': False,
+            'handle_out_of_walltime': True,
             'handle_vcrelax_converged_except_final_scf': False,
             'handle_relax_recoverable_ionic_convergence_error': False,
             'handle_relax_recoverable_electronic_convergence_error': False,
@@ -210,7 +210,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         cls,
         code,
         structure,
-        stashed_folder,
+        stash_directory,
         nstep=None,
         total_energy_max_fluctuation=None,
         protocol=None,
@@ -310,7 +310,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             else: 
                 raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
 
-        builder['pw']['parent_folder'] = stashed_folder
+        builder['pw']['parent_folder'] = stash_directory
         if nstep: builder['nstep'] = nstep
         else: builder['nstep'] = orm.Int(inputs['nstep'])
         if total_energy_max_fluctuation: 
@@ -456,7 +456,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             if self.ctx.inputs.settings:
                 kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
 
-            res = get_structure_from_trajectory.run_get_node(**kwargs)
+            res = get_structure_from_trajectory(**kwargs)
 
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
@@ -470,7 +470,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             #self.ctx.inputs.pop('parent_folder', None)
 
         self.ctx.inputs.parameters['CONTROL']['nstep'] = self.ctx.mdsteps_todo
-        self.ctx.inputs.metadata['label'] = 'flipper_'+str(self.ctx.iteration + 1)
+        self.ctx.inputs.metadata['label'] = f'flipper_{self.ctx.iteration:02d}'
         self.ctx.has_initial_velocities = False
 
         ## if this is not flipper MD

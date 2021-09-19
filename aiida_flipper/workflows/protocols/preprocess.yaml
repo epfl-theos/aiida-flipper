@@ -1,6 +1,5 @@
 default_inputs:
     clean_workdir: True
-    distance: 8.
     element_to_remove: 'Li'
     stash_directory: '/store/marvel/mr0/tthakur/charge_densities/' # common directory
     prepro:

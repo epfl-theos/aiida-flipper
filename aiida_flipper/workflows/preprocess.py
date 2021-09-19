@@ -127,12 +127,15 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, stash_directory=None, protocol=None, overrides=None, **kwargs
+        cls, code, structure, distance, element_to_remove=None, stash_directory=None, protocol=None, overrides=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param distance: the ``distance`` used to make supercells, do NOT change it after calling the builder
+        :param elemet_to_remove: the ``element`` treated as pinball in the model, do NOT change it after calling the builder
+        :param stash_directory: the ``path`` where the charge densities of host lattice are stored
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
         :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
@@ -141,8 +144,14 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         """
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        sc_struct = make_supercell(structure, inputs['distance'])
-        supercell = delithiate_structure(sc_struct, inputs['element_to_remove'])
+        if element_to_remove: element = element_to_remove
+        else: element = inputs['element_to_remove']
+
+        if stash_directory: stash = stash_directory
+        else: stash = orm.Str(inputs['stash_directory'])
+
+        sc_struct = make_supercell(structure, distance)
+        supercell = delithiate_structure(sc_struct, element)
 
         args = (code, structure, protocol)
         PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
@@ -151,9 +160,6 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
         prepro['pw'].pop('structure', None)
         prepro.pop('clean_workdir', None)
-        
-        if stash_directory: stash = stash_directory
-        else: stash = orm.Str(inputs['stash_directory'])
 
         prepro['pw']['metadata']['options'].update({'stash': {'source_list': ['out', 'aiida.in', 'aiida.out'], 
                                                         'target_base': stash.value, 
@@ -176,8 +182,8 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         builder.prepro = prepro
         builder.structure = structure
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
-        builder.distance = orm.Float(inputs['distance'])
-        builder.element_to_remove = orm.Str(inputs['element_to_remove'])
+        builder.distance = orm.Float(distance)
+        builder.element_to_remove = orm.Str(element)
 
         return builder
 

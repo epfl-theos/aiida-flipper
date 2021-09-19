@@ -26,6 +26,14 @@ default_inputs:
         pw:
             settings:
                 gamma_only: True
+            metadata:
+                options:
+                    resources: # For 128 threads in eiger
+                        num_machines: 1
+                        num_cores_per_mpiproc: 16
+                        num_mpiprocs_per_machine: 8
+                    max_wallclock_seconds: 43200  # 12 hours
+                    withmpi: True
 
 
 default_protocol: moderate
