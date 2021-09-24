@@ -3,7 +3,7 @@ default_inputs:
     metadata:
         label: ''
     nstep: 100000
-    total_energy_max_fluctuation: 100.
+    total_energy_max_fluctuation: 1.e+9
     meta_parameters:
         conv_thr_per_atom: 0.2e-9
         etot_conv_thr_per_atom: 1.e-5
@@ -21,9 +21,9 @@ default_inputs:
         parameters:
             CONTROL:
                 calculation: md
-                dt: 50
+                dt: 50 # 2.4 femto seconds
                 lflipper: True
-                iprint: 1000
+                iprint: 10
                 ldecompose_forces: True
                 ldecompose_ewald: True
                 flipper_do_nonloc: True

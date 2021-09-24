@@ -102,7 +102,7 @@ class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
         except KeyError:
             raise KeyError('Keyword min_iterations not included in diffusion convergence parameters')
 
-        for key, typ in (('species', six.string_types),):
+        for key, typ in (('species', str),):
             if key not in diffusion_convergence_parameters_d:
                 raise KeyError('Key {} has to be in diffusion convergence parameters')
             if not isinstance(diffusion_convergence_parameters_d[key], typ):

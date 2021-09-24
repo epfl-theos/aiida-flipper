@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 
-from six.moves import map
-from six.moves import range
-
 import os, re
 import numpy as np
 
@@ -322,8 +319,11 @@ class FlipperParser(PwParser):
 
         # TIMES # is this necessary, these are easy to recreate?
         trajectory_data.set_array('times', scalar_quantities[:, 1])
+        # do we want to change the time to fs to make it consistent with samos?
+        # trajectory_data.set_array('times', 1000 * scalar_quantities[:, 1])
+        # trajectory_data.set_attribute('units|times', 'fs')
         trajectory_data.set_attribute('units|times', 'ps')
-        trajectory_data.set_attribute('sim_time_fs', scalar_quantities[-1, 1] - scalar_quantities[0, 1])
+        trajectory_data.set_attribute('sim_time_fs', 1000 * (scalar_quantities[-1, 1] - scalar_quantities[0, 1]))
 
         # ENERGIES
         trajectory_data.set_array('kinetic_energies', scalar_quantities[:, 2])

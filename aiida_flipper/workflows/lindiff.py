@@ -97,6 +97,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
         # no need to check if supercell structure exists, already checked by builder
         qb.append(orm.StructureData, with_incoming='prepro')
+        if len(qb.all(flat=True)) > 1: self.report('Multiple charge densities found for structure <{}>; using the last one to start MD runs'.format(self.inputs.structure.pk))
         self.ctx.current_structure = qb.all(flat=True)[-1]
 
         # I store all the input dictionaries in context variables

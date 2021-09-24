@@ -78,7 +78,7 @@ def get_diffusion_from_msd(structure, parameters, trajectory):
     # Checking if everything is consistent
 
     units_positions = trajectory.get_attribute('units|positions')
-    timestep_fs = trajectory.get_attribute('timestep_in_fs')
+    timestep_fs = trajectory.get_attribute('timestep_in_fs') 
     equilibration_steps = int(parameters_d.pop('equilibration_time_fs', 0) / timestep_fs)
     if units_positions in ('bohr', 'atomic'):
         pos_conversion = bohr_to_ang

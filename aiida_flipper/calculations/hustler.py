@@ -1,15 +1,18 @@
 import os
 import six
-from six.moves import zip
 import numpy as np
 
 from aiida import orm
-from aiida.common import exceptions
+from aiida.common import exceptions, datastructures
 from aiida.common.lang import classproperty
 
 from aiida_quantumespresso.calculations.pw import PwCalculation
-from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict, _pop_parser_options
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
+
+from aiida.plugins import CalculationFactory
+FlipperCalculation = CalculationFactory('quantumespresso.flipper')
+
 
 class HustlerCalculation(PwCalculation):
     
@@ -25,6 +28,10 @@ class HustlerCalculation(PwCalculation):
         """
         Following errors are taken from FlipperCalculation class
         """
+        # Input TrajectoryData containing the snapshots that will be used to generate hustler.pos file
+        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=True,
+            help='The trajectory containing the uncorrelated configurations, that shall be used to calculate DFT and pinball forces')
+
         # Unrecoverable errors
         spec.exit_code(360, 'ERROR_UNKNOWN_TIMESTEP',
             message='The parser could not get the timestep in the calculation.')
@@ -49,12 +56,163 @@ class HustlerCalculation(PwCalculation):
     def prepare_for_submission(self, folder):
         """
         Create the input files from the input nodes passed to this instance of the `CalcJob`.
-        Calls the parent's prepare_for_submission, and adds files to calcinfo instance.
+        Copy of the original fucntion with one change - hustler_arr which is the trajectory containing
+        snapshots to generate hustler.pos file is passed as an additional input. 
 
         :param folder: an `aiida.common.folders.Folder` to temporarily write files on disk
         :return: `aiida.common.datastructures.CalcInfo` instance
         """
-        calcinfo = super(FlipperCalculation, self).prepare_for_submission(folder)
+        # pylint: disable=too-many-branches,too-many-statements
+        if 'settings' in self.inputs:
+            settings = _uppercase_dict(self.inputs.settings.get_dict(), dict_name='settings')
+        else:
+            settings = {}
+
+        # Check that a pseudo potential was specified for each kind present in the `StructureData`
+        kinds = [kind.name for kind in self.inputs.structure.kinds]
+        if set(kinds) != set(self.inputs.pseudos.keys()):
+            raise exceptions.InputValidationError(
+                'Mismatch between the defined pseudos and the list of kinds of the structure.\n'
+                'Pseudos: {};\nKinds: {}'.format(', '.join(list(self.inputs.pseudos.keys())), ', '.join(list(kinds)))
+            )
+
+        local_copy_list = []
+        remote_copy_list = []
+        remote_symlink_list = []
+
+        # Create the subfolder that will contain the pseudopotentials
+        folder.get_subfolder(self._PSEUDO_SUBFOLDER, create=True)
+        # Create the subfolder for the output data (sometimes Quantum ESPRESSO codes crash if the folder does not exist)
+        folder.get_subfolder(self._OUTPUT_SUBFOLDER, create=True)
+
+        # If present, add also the Van der Waals table to the pseudo dir. Note that the name of the table is not checked
+        # but should be the one expected by Quantum ESPRESSO.
+        if 'vdw_table' in self.inputs:
+            uuid = self.inputs.vdw_table.uuid
+            src_path = self.inputs.vdw_table.filename
+            dst_path = os.path.join(self._PSEUDO_SUBFOLDER, self.inputs.vdw_table.filename)
+            local_copy_list.append((uuid, src_path, dst_path))
+
+        if 'hubbard_file' in self.inputs:
+            uuid = self.inputs.hubbard_file.uuid
+            src_path = self.inputs.hubbard_file.filename
+            dst_path = self.filename_input_hubbard_parameters
+            local_copy_list.append((uuid, src_path, dst_path))
+
+        arguments = [
+            self.inputs.parameters,
+            settings,
+            self.inputs.pseudos,
+            self.inputs.structure,
+        ]
+        if self._use_kpoints:
+            arguments.append(self.inputs.kpoints)
+        input_filecontent, local_copy_pseudo_list = self._generate_PWCPinputdata(*arguments)
+        local_copy_list += local_copy_pseudo_list
+
+        with folder.open(self.metadata.options.input_filename, 'w') as handle:
+            handle.write(input_filecontent)
+
+        # operations for restart
+        symlink = settings.pop('PARENT_FOLDER_SYMLINK', self._default_symlink_usage)  # a boolean
+        if symlink:
+            if 'parent_folder' in self.inputs:
+                # I put the symlink to the old parent ./out folder
+                remote_symlink_list.append((
+                    self.inputs.parent_folder.computer.uuid,
+                    os.path.join(self.inputs.parent_folder.get_remote_path(),
+                                 self._restart_copy_from), self._restart_copy_to
+                ))
+        else:
+            # copy remote output dir, if specified
+            if 'parent_folder' in self.inputs:
+                remote_copy_list.append((
+                    self.inputs.parent_folder.computer.uuid,
+                    os.path.join(self.inputs.parent_folder.get_remote_path(),
+                                 self._restart_copy_from), self._restart_copy_to
+                ))
+
+        # Create an `.EXIT` file if `only_initialization` flag in `settings` is set to `True`
+        if settings.pop('ONLY_INITIALIZATION', False):
+            with folder.open(f'{self._PREFIX}.EXIT', 'w') as handle:
+                handle.write('\n')
+
+        # Check if specific inputs for the ENVIRON module where specified
+        environ_namelist = settings.pop('ENVIRON', None)
+        if environ_namelist is not None:
+            if not isinstance(environ_namelist, dict):
+                raise exceptions.InputValidationError('ENVIRON namelist should be specified as a dictionary')
+            # We first add the environ flag to the command-line options (if not already present)
+            try:
+                if '-environ' not in settings['CMDLINE']:
+                    settings['CMDLINE'].append('-environ')
+            except KeyError:
+                settings['CMDLINE'] = ['-environ']
+            # To create a mapping from the species to an incremental fortran 1-based index
+            # we use the alphabetical order as in the inputdata generation
+            kind_names = sorted([kind.name for kind in self.inputs.structure.kinds])
+            mapping_species = {kind_name: (index + 1) for index, kind_name in enumerate(kind_names)}
+
+            with folder.open(self._ENVIRON_INPUT_FILE_NAME, 'w') as handle:
+                handle.write('&ENVIRON\n')
+                for key, value in sorted(environ_namelist.items()):
+                    handle.write(convert_input_to_namelist_entry(key, value, mapping=mapping_species))
+                handle.write('/\n')
+
+        # Check for the deprecated 'ALSO_BANDS' setting and if present fire a deprecation log message
+        also_bands = settings.pop('ALSO_BANDS', None)
+        if also_bands:
+            self.node.logger.warning(
+                "The '{}' setting is deprecated as bands are now parsed by default. "
+                "If you do not want the bands to be parsed set the '{}' to True {}. "
+                'Note that the eigenvalue.xml files are also no longer stored in the repository'.format(
+                    'also_bands', 'no_bands', type(self)
+                )
+            )
+
+        calcinfo = datastructures.CalcInfo()
+
+        calcinfo.uuid = str(self.uuid)
+        # Start from an empty command line by default
+        cmdline_params = self._add_parallelization_flags_to_cmdline_params(cmdline_params=settings.pop('CMDLINE', []))
+
+        # we commented calcinfo.stin_name and added it here in cmdline_params
+        # in this way the mpirun ... pw.x ... < aiida.in
+        # is replaced by mpirun ... pw.x ... -in aiida.in
+        # in the scheduler, _get_run_line, if cmdline_params is empty, it
+        # simply uses < calcinfo.stin_name
+        codeinfo = datastructures.CodeInfo()
+        codeinfo.cmdline_params = (list(cmdline_params) + ['-in', self.metadata.options.input_filename])
+        codeinfo.stdout_name = self.metadata.options.output_filename
+        codeinfo.code_uuid = self.inputs.code.uuid
+        calcinfo.codes_info = [codeinfo]
+
+        calcinfo.local_copy_list = local_copy_list
+        calcinfo.remote_copy_list = remote_copy_list
+        calcinfo.remote_symlink_list = remote_symlink_list
+
+        # Retrieve by default the output file and the xml file
+        calcinfo.retrieve_list = []
+        calcinfo.retrieve_list.append(self.metadata.options.output_filename)
+        calcinfo.retrieve_list.extend(self.xml_filepaths)
+        calcinfo.retrieve_list += settings.pop('ADDITIONAL_RETRIEVE_LIST', [])
+        calcinfo.retrieve_list += self._internal_retrieve_list
+
+        # Retrieve the k-point directories with the xml files to the temporary folder
+        # to parse the band eigenvalues and occupations but not to have to save the raw files
+        # if and only if the 'no_bands' key was not set to true in the settings
+        no_bands = settings.pop('NO_BANDS', False)
+        if no_bands is False:
+            xmlpaths = os.path.join(self._OUTPUT_SUBFOLDER, self._PREFIX + '.save', 'K*[0-9]', 'eigenval*.xml')
+            calcinfo.retrieve_temporary_list = [[xmlpaths, '.', 2]]
+
+        # We might still have parser options in the settings dictionary: pop them.
+        _pop_parser_options(self, settings)
+
+        if settings:
+            unknown_keys = ', '.join(list(settings.keys()))
+            raise exceptions.InputValidationError(f'`settings` contained unexpected keys: {unknown_keys}')
+
         calcinfo.retrieve_temporary_list = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE, self._HUSTLER_FILE]
         return calcinfo
         
@@ -67,7 +225,7 @@ class HustlerCalculation(PwCalculation):
         retdict = PwCalculation._use_methods
 
         retdict['array'] = {
-            'valid_types': ArrayData,
+            'valid_types': orm.ArrayData,
             'additional_parameter': None,
             'linkname': 'array',
             'docstring': 'Use the node defining the trajectory to sample over',
@@ -75,18 +233,11 @@ class HustlerCalculation(PwCalculation):
         return retdict
 
     @classmethod
-    def _generate_PWCPinputdata(cls, parameters, settings, pseudos, structure, kpoints=None, use_fractional=False):  # pylint: disable=invalid-name
+    def _generate_PWCPinputdata(cls, parameters, settings, pseudos, structure, hustler_arr, kpoints=None, use_fractional=False):  # pylint: disable=invalid-name
         """
-        Copied from original _general_PWCPinputdata,
-        with one key change, namely that kind list is NOT sorted alphabetically.
+        Copied from original _general_PWCPinputdata, with two key changes - 
+        kind list is NOT sorted alphabetically, and an extra input of hustler-positions.
         """
-        
-        ## Check if following is coded correctly
-        try:
-            hustler_arr = inputdict.pop(self.get_linkname('array'))
-        except KeyError:
-            raise InputValidationError("No array specified for this calculation")
-        
         ##### THE hustler file:
         hustler_positions = hustler_arr.get_array('positions')
         pos_units = hustler_arr.get_attr('units|positions', 'angstrom')
@@ -96,7 +247,7 @@ class HustlerCalculation(PwCalculation):
         elif pos_units == 'angstrom':
             hustler_positions /= 0.529177249
         else:
-            raise InputValidationError("Unknown position units {}".format(pos_units))
+            raise exceptions.InputValidationError("Unknown position units {}".format(pos_units))
         # I need to check what units the positions were given
         try:
             symbols = hustler_arr.get_attr('symbols')
@@ -104,23 +255,20 @@ class HustlerCalculation(PwCalculation):
             symbols = hustler_arr.get_array('symbols')
         nstep, nhustled, _ = hustler_positions.shape
         if len(symbols) != nhustled:
-            raise InputValidationError(
+            raise exceptions.InputValidationError(
                 "Length of symbols does not match array dimensions"
             )
 
-        with open( tempfolder.get_abs_path(self._HUSTLER_FILE), 'w') as hustlerfile:
+        with open(cls._HUSTLER_FILE, 'w') as hustlerfile:
             for istep, tau_of_t in enumerate(hustler_positions):
                 hustlerfile.write('> {}\n'.format(istep))
                 for symbol, pos in zip(symbols, tau_of_t):
                     hustlerfile.write('{:<3}   {}\n'.format(symbol, '   '.join(['{:16.10f}'.format(f) for f in pos])))
-                    
-        ## till here
-        
+                            
         # pylint: disable=too-many-branches,too-many-statements
         from aiida.common.utils import get_unique_filename
         import re
         local_copy_list_to_append = []
-        
         
         # I put the first-level keys as uppercase (i.e., namelist and card names)
         # and the second-level keys as lowercase
@@ -157,7 +305,7 @@ class HustlerCalculation(PwCalculation):
         input_params['CONTROL']['prefix'] = cls._PREFIX
         input_params['CONTROL']['lhustle'] = True
         input_params['CONTROL']['hustler_nat'] = nhustled
-        input_params['CONTROL']['hustlerfile'] = self._HUSTLER_FILE
+        input_params['CONTROL']['hustlerfile'] = cls._HUSTLER_FILE
         input_params['CONTROL']['verbosity'] = input_params['CONTROL'].get('verbosity', cls._default_verbosity)
 
         # ============ I prepare the input site data =============

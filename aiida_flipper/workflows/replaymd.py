@@ -4,7 +4,7 @@ from aiida import orm
 from aiida.common import AttributeDict, exceptions
 from aiida.common.links import LinkType
 from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
-from aiida.plugins import CalculationFactory, GroupFactory
+from aiida.plugins import CalculationFactory, GroupFactory, WorkflowFactory
 
 ## builder imports
 from aiida.common.lang import type_check
@@ -55,7 +55,7 @@ def get_total_trajectory(workchain, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
-        res = concatenate_trajectory(**traj_d) # check if this function is used correctly
+        res = concatenate_trajectory(**traj_d)
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
         # no reason to concatenate if I have only one trajectory (saves space in repository)
@@ -138,6 +138,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         spec.input('total_energy_max_fluctuation', valid_type=orm.Float, required=False,
             help='The maximum total energy fluctuation allowed (eV). If the total energy has varied more than this '
                  'threshold, the workchain will fail.')
+        spec.input('previous_trajectory', valid_type=orm.TrajectoryData, required=False,
+            help='Trajectory of previous calculation, needed to pickup from last MD run (otherwise we do a normal start from flipper compatible structure).')
 
         spec.outline(
             cls.setup,
@@ -195,9 +197,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
-    
-    ## Builder option doesn't work properly if called from this class, best to use get_builder_from_protocol() in LinDiffWorkChain
-    
+        
     @classmethod
     def get_protocol_filepath(cls):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
@@ -213,6 +213,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         stash_directory,
         nstep=None,
         total_energy_max_fluctuation=None,
+        previous_trajectory=None,
         protocol=None,
         overrides=None,
         electronic_type=ElectronicType.INSULATOR,
@@ -221,7 +222,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         **_
     ):
         """
-        !! This is a copy of PwBaseWorkChain get_builder_from_protocol() with a change of default electronic type to insulator and addition of flipper inputs and loading of flipper protocol file!!
+        !! This is a copy of PwBaseWorkChain get_builder_from_protocol() with a change of default
+         electronic type to insulator and addition of flipper inputs and loading of flipper protocol file!!
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
@@ -230,8 +232,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
         :param spin_type: indicate the spin polarization type to use through a ``SpinType`` instance.
         :param initial_magnetic_moments: optional dictionary that maps the initial magnetic moment of each kind to a
-            desired value for a spin polarized calculation. Note that for ``spin_type == SpinType.COLLINEAR`` an initial
-            guess for the magnetic moment is automatically set in case this argument is not provided.
+            desired value for a spin polarized calculation. Note that for ``spin_type == SpinType.COLLINEAR`` an 
+            initial guess for the magnetic moment is automatically set in case this argument is not provided.
         :return: a process builder instance with all inputs defined ready for launch.
         """
         from aiida_quantumespresso.workflows.protocols.utils import get_starting_magnetization
@@ -317,7 +319,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
         else: 
             builder['total_energy_max_fluctuation'] = orm.Float(inputs['total_energy_max_fluctuation'])  
-
+        if previous_trajectory: builder['previous_trajectory'] = previous_trajectory
         # pylint: enable=no-member
         return builder
 
@@ -379,6 +381,22 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.inputs.parameters.setdefault('CONTROL', {})
         self.ctx.inputs.parameters['CONTROL'].setdefault('calculation', 'md')
         #self.ctx.is_hustler = self.inputs.is_hustler
+
+        # If trajectory is provided, check that the parameters are same across the 2 MD runs
+        if self.inputs.get('previous_trajectory'):
+            qb = orm.QueryBuilder()
+            qb.append(orm.TrajectoryData, filters={'id':{'==':self.inputs.get('previous_trajectory').pk}}, tag='traj')
+            qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='traj', tag='replay')
+            try:
+                wc, = qb.first()
+            except exceptions.NotExistent:
+                raise Exception('WorkChain of previous trajectory not found.')
+            if wc:
+                param_d = wc.inputs['pw']['parameters'].get_dict()
+                struct = wc.inputs['pw']['structure']
+                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
+                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -461,6 +479,29 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
             #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'restart'  ## NOT NEEDED IN PINBALL
+        elif self.inputs.get('previous_trajectory'):
+            self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
+            kwargs = {'trajectory': self.inputs.get('previous_trajectory'),
+                      'parameters': get_or_create_input_node(orm.Dict,
+                          dict(step_index=-1,
+                               recenter=False,
+                               create_settings=True,
+                               complete_missing=True),
+                          store=True),
+                      'structure': self.ctx.inputs.structure,
+                      'metadata': {'call_link_label': 'get_structure'}}
+            if self.ctx.inputs.settings:
+                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
+
+            res = get_structure_from_trajectory(**kwargs)
+
+            self.ctx.inputs.structure = res['structure']
+            self.ctx.inputs.settings = res['settings'].get_dict()
+
+            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.inputs.get('previous_trajectory').attributes['array|positions'][0] - 1)
+            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
+            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
+        
         else:
             # start from scratch, eventually use `initial_velocities` if defined in input settings
             # (these were already added to `self.ctx.inputs.settings` by `validate_parameters`)
