@@ -20,6 +20,7 @@ default_inputs:
         parameters:
             CONTROL:
                 calculation: md
+                hustlerfile: 'hustler.pos'
                 lhustle: True
                 lflipper: True
                 ldecompose_forces: True

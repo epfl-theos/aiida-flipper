@@ -13,12 +13,8 @@ SsspFamily = GroupFactory('pseudo.family.sssp')
 PseudoDojoFamily = GroupFactory('pseudo.family.pseudo_dojo')
 CutoffsPseudoPotentialFamily = GroupFactory('pseudo.family.cutoffs')
 
-#from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
 from aiida_quantumespresso.utils.defaults.calculation import pw as qe_defaults
 from aiida_quantumespresso.utils.mapping import update_mapping, prepare_process_inputs
-#from aiida_quantumespresso.utils.pseudopotential import validate_and_prepare_pseudos_inputs
-#from aiida_quantumespresso.utils.resources import get_default_options, get_pw_parallelization_parameters
-#from aiida_quantumespresso.utils.resources import cmdline_remove_npools, create_scheduler_resources
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
 from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
@@ -35,7 +31,7 @@ def get_completed_number_of_steps(calc):
     except exceptions.NotExistent:
         raise Exception('Output trajectory not found.')
     nstep = calc.inputs.parameters.get_attribute('CONTROL').get('iprint', 1) * \
-                (traj.get_attribute('array|positions')[0] - 1)  # the zeroth step is also saved
+                (traj.get_attribute('array|positions')[0])  # the zeroth step is not the starting input anymore
     return nstep
 
 def get_total_trajectory(workchain, store=False):
@@ -86,23 +82,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
     Velocities are read from the `ATOMIC_VELOCITIES` key of the settings node.
     If not found they will be initialized.
     """
-    ## NOTES ##
-    # with 'replay' we indicate a molecular dynamics restart, in which positions & velocities are read from the
-    # last step of the previous trajectory. In this work chain we always perform a 'dirty restart', i.e. the charge
-    # densities are always initialized from scratch (we do not use the `restart_mode='restart'` of QE).
-    # In reality, in the Pinball code the host-lattice charge density is always read from file. Therefore we always
-    # set a `parent_folder`, such that the plugin will copy it to the new location when restarting.
-    #
-    # The parser of a FlipperCalculation will return an output trajectory node if it manages to parse it.
-    # As long as an output trajectory was produced, erros raised from the parsing of the aiida.out log file
-    # (e.g. out of walltime, incomplete output, ...) will be ignored and we shall try to (dirty) restart.
-
-    ## QUESTION ##
-    # probably we could define the `_process_class` at the instance level, thus allowing one to choose
-    # to use either a `PwCalculation`, `FlipperCalculation`, or `HustlerCalculation` without redefining this class.
-    # The drawback is probably that (I guess) the inputs will not be exposed (in the builder?)?
-    # Alternatively, one could just define subclasses where `_process_class` is set accordingly.
-    _process_class = HustlerCalculation  # probably we can define this in a subclass
+    _process_class = HustlerCalculation  
 
     defaults = AttributeDict({
         'qe': qe_defaults,
@@ -212,10 +192,14 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
     ):
         """
         !! This is a copy of PwBaseWorkChain get_builder_from_protocol() with a change of default
-         electronic type to insulator and addition of flipper inputs and loading of flipper protocol file!!
+         electronic type to insulator and addition of hustler inputs and loading a trajectory for hustler calculation!!
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param stash_directory: the location of charge densities of host lattice
+        :param calculation_type: If I should run a `pinball` or regular QE calculation (`DFT`)
+        :param hustler_snapshots: a trajectory file typically the output of a/multiple flipper calculation(s) from which I shall extract `nstep` configurations
+        :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces shall be evaluated
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
         :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
@@ -400,30 +384,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             struct = wc.inputs['pw']['structure']
             if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
 
-#    def validate_kpoints(self):
-#        """Validate the inputs related to k-points.
-#
-#        Either an explicit `KpointsData` with given mesh/path, or a desired k-points distance should be specified. In
-#        the case of the latter, the `KpointsData` will be constructed for the input `StructureData` using the
-#        `create_kpoints_from_distance` calculation function.
-#        """
-
-#    def validate_pseudos(self):
-#        """Validate the inputs related to pseudopotentials.
-#
-#        Either the pseudo potentials should be defined explicitly in the `pseudos` namespace, or alternatively, a family
-#        can be defined in `pseudo_family` that will be used together with the input `StructureData` to generate the
-#        required mapping.
-#        """
-
-#    def validate_resources(self):
-#        """Validate the inputs related to the resources.
-#
-#        One can omit the normally required `options.resources` input for the `PwCalculation`, as long as the input
-#        `automatic_parallelization` is specified. If this is not the case, the `metadata.options` should at least
-#        contain the options `resources` and `max_wallclock_seconds`, where `resources` should define the `num_machines`.
-#        """
-
     def set_max_seconds(self, max_wallclock_seconds):
         # called by self.validate_resources
         """Set the `max_seconds` to a fraction of `max_wallclock_seconds` option to prevent out-of-walltime problems.
@@ -457,6 +417,8 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         self.ctx.inputs.metadata['label'] = f'hustler_{self.ctx.iteration:02d}'
         self.ctx.has_initial_velocities = False
 
+        # I extract `nsteps` configuration from the input trajectory, by dividing the trajecory in `nsteps+1` chunks
+        # and skipping the 1st snapshot which is the default starting positions
         hustler_snapshots = self.inputs.get('hustler_snapshots')
         arraynames = hustler_snapshots.get_arraynames()
         traj = orm.TrajectoryData()
@@ -467,7 +429,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                 to_skip, = hustler_snapshots.get_shape('steps')
                 tmp_array = hustler_snapshots.get_array(arrname)[::int(to_skip/self.ctx.nsteps)]
                 # to skip the positions calculated before
-                traj.set_array(arrname, tmp_array[self.ctx.mdsteps_todo+1:])
+                traj.set_array(arrname, tmp_array[self.ctx.mdsteps_done+1:])
         [traj.set_attribute(k, v) for k, v in hustler_snapshots.attributes_items() if not k.startswith('array|')]
         if 'timestep_in_fs' in hustler_snapshots.attributes:
             traj.set_attribute('sim_time_fs', traj.get_array('steps').size * hustler_snapshots.get_attribute('timestep_in_fs'))
@@ -501,18 +463,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                     self.ctx.is_finished = False
             else:
                 self.report('{}<{}> ran {} steps. This trajectory will be DISCARDED!'.format(node.process_label, node.pk, nsteps_run_last_calc))
-
-#    def report_error_handled(self, calculation, action):
-#        """Report an action taken for a calculation that has failed.
-#
-#        This should be called in a registered error handler if its condition is met and an action was taken.
-#
-#        :param calculation: the failed calculation node
-#        :param action: a string message with the action taken
-#        """
-#        arguments = [calculation.process_label, calculation.pk, calculation.exit_status, calculation.exit_message]
-#        self.report('{}<{}> failed with exit status {}: {}'.format(*arguments))
-#        self.report('Action taken: {}'.format(action))
 
     def results(self):  # pylint: disable=inconsistent-return-statements
         """Concatenate the trajectories and attach the outputs."""
@@ -563,16 +513,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                 wrapped[key] = value
 
         return AttributeDict(wrapped)
-
-
-    ### PROCESS HANDLERS ###
-    # error codes > 600 are related to MD trajectories
-    # Often these errors happen when the calculation is killed in the middle of writing.
-    # If an output trajectory is found, we shall always restart, no matter the error.
-    # Even with error codes < 400 a trajectory may have been produced.
-    # Otherwise, execute the other error handlers.
-    # If no error handler is triggered (or none has returned a ProcessHandlerReport), the error is considered as
-    # 'unhandled': in this case the calculation will be relaunched once. If it fails again, the work chain will fail.
 
     @process_handler(priority=700)
     def handle_salvage_output_trajectory(self, calculation):

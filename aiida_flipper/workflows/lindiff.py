@@ -25,7 +25,7 @@ def get_trajectories_dict(pk_list):
 
 class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
     """Workchain to run multiple MD calculations till the diffusion coefficient is 
-    converged, using Quantum ESPRESSO pw.x."""
+    converged, using Pinball Quantum ESPRESSO pw.x."""
     _process_class = ReplayMDWorkChain
     @classmethod
     def define(cls, spec):

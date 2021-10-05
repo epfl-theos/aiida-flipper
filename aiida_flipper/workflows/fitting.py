@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Workchain to generate pinball hyperparameters"""
+from aiida.engine import calcfunction
 from aiida.engine.processes import workchains
 from samos.trajectory import Trajectory
 from aiida import orm
@@ -10,176 +11,42 @@ import numpy as np
 
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
+from aiida_flipper.calculations.functions import update_parameters_with_coefficients, get_pinball_factors
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDHWorkChain = WorkflowFactory('quantumespresso.flipper.replaymdhustler')
 
-def get_frac_coords(cart_coords, cell_matrix):
-    return np.dot(cart_coords, np.linalg.inv(cell_matrix))
 
-def get_cart_coords(frac_coords, cell_matrix):
-    return np.dot(frac_coords, cell_matrix)
-
-@make_inline
-def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
-    from aiida_flipper.utils import Force, fit_with_lin_reg, make_fitted
-    from scipy.stats import linregress
-
-    params_dict = parameters.get_dict()
-    starting_point = params_dict['starting_point']
-    stepsize = params_dict['stepsize']
-    nsample = params_dict.get('nsample', None)
-    signal_indices = params_dict.get('signal_indices', None)
-
-    atom_indices_scf = [i for i, s in enumerate(trajectory_scf.get_symbols()) if s == params_dict['symbol']]
-    atom_indices_pb = [i for i, s in enumerate(trajectory_pb.get_symbols()) if s == params_dict['symbol']]
-
-    all_forces_scf = trajectory_scf.get_array('forces')[:, atom_indices_scf,:]
-    all_forces_pb = trajectory_pb.get_array('forces')[:, atom_indices_pb,:]
+class FittingWorkChain(ProtocolMixin, BaseRestartWorkChain):
+    """Workchain to run hustler level `pinball` and `DFT` calculations to fit forces and
+    generate pinball hyperparameters, using Pinball Quantum ESPRESSO pw.x."""
+    _process_class = ReplayMDHWorkChain
 
 
-    # You need to remove all the steps that are starting indices due to this stupid thing with the hustler first step. 
-    starting_indices = set()
-    for traj in (trajectory_pb, trajectory_scf):
-        [starting_indices.add(_) for _ in np.where(trajectory_scf.get_array('steps') == 0)[0]]
+    def positions(self):
+        return self.inp.positions
 
-    # You also need to remove steps for the trajectory_scf that did not SCF CONVERGE!!!!
-    convergence = trajectory_scf.get_array('scf_convergence')
-    [starting_indices.add(_) for _ in np.where(~convergence)[0]]
-
-    for idx in sorted(starting_indices, reverse=True):
-        all_forces_scf = np.delete(all_forces_scf, idx, axis=0)
-        all_forces_pb  = np.delete(all_forces_pb,  idx, axis=0)
-
-    if nsample == None:
-        nsample = min((len(all_forces_scf), len(all_forces_pb)))
-
-    #~ print (all_forces_scf[starting_point:starting_point+nsample*stepsize:stepsize]).shape
-    forces_scf = Force(all_forces_scf[starting_point:starting_point+nsample*stepsize:stepsize])
-    forces_pb = Force(all_forces_pb[starting_point:starting_point+nsample*stepsize:stepsize])
-
-    coefs, mae = fit_with_lin_reg(forces_scf, forces_pb,
-            verbosity=0, divide_r2=params_dict['divide_r2'], signal_indices=signal_indices)
-    try:
-        mae_f = float(mae)
-    except:
-        mae_f = None
-
-    forces_pb_fitted = make_fitted(forces_pb, coefs=coefs, signal_indices=signal_indices)
-    slope_before_fit, intercept_before_fit, rvalue_before_fit, pvalue_before_fit, stderr_before_fit = linregress(
-            forces_scf.get_signal(0).flatten(), forces_pb_fitted.get_signal(0).flatten())
-    slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(
-            forces_scf.get_signal(0).flatten(), forces_pb.get_signal(0).flatten())
-    #~ plot_forces((forces_scf, pb_fitted))
-
-    coeff_params = ParameterData(dict={
-        'coefs': coefs.tolist(),
-        'mae': mae_f,
-        'nr_of_coefs': len(coefs),
-        'indices_removed': sorted(starting_indices),
-        'linreg_before_fit': {
-            'slope': slope_before_fit,
-            'intercept': intercept_before_fit,
-            'r2value': rvalue_before_fit**2,
-            'pvalue_zero_slope': pvalue_before_fit,
-            'stderr': stderr_before_fit
-            },
-        'linreg_after_fit': {
-            'slope': slope_after_fit,
-            'intercept': intercept_after_fit,
-            'r2value': rvalue_after_fit**2,
-            'pvalue_zero_slope': pvalue_after_fit,
-            'stderr': stderr_after_fit
-            },
-    })
-    return {'coefficients': coeff_params}
-
-
-@make_inline
-def get_configurations_from_trajectories_inline(parameters, structure, **branches):
-    """
-    parameters:
-        nr_of_configurations --
-        indices_to_read, symbols to_read -- indices read from branches
-        indices_to_overwrite, symbols_to_overwrite -- indices of structure that will be overwritten
-        remap_into_cell -- if True remap the positions read from branches into the cell of structure (uses frac coordinates)
-    """
-    parameters_d = parameters.get_dict()
-    nr_of_configurations = parameters_d['nr_of_configurations']
-    # taking the trajectories, sorted by key name:
-    sorted_trajectories = zip(*sorted(branches.items()))[1]
-    
-    sorted_positions = np.concatenate([t.get_positions() for t in sorted_trajectories])
-    sorted_cells = np.concatenate([t.get_cells() for t in sorted_trajectories])
-    positions = structure.get_ase().positions
-
-    if 'indices_to_overwrite' in parameters_d:
-        indices_to_overwrite = np.array(parameters_d['indices_to_overwrite'])
-    elif 'symbols_to_overwrite' in parameters_d:
-        symbols = parameters_d['symbols_to_overwrite']
-        if isinstance(symbols, (set, tuple, list)):
-            pass
-        elif isinstance(symbols, str):
-            symbols = [symbols]
-        else:
-            raise TypeError("Symbols has to be str or a list of strings")
-        indices_to_overwrite = np.array([i for i, s in enumerate(structure.get_site_kindnames()) if s in symbols])
-    else:
-        indices_to_overwrite = np.arange(len(positions))
-
-    if 'indices_to_read' in parameters_d:
-        indices_to_read = np.array(parameters_d['indices_to_read'])
-    elif 'symbols_to_read' in parameters_d:
-        symbols = parameters_d['symbols_to_read']
-        if isinstance(symbols, (set, tuple, list)):
-            pass
-        elif isinstance(symbols, str):
-            symbols = [symbols]
-        else:
-            raise TypeError("Symbols has to be str or a list of strings")
-        indices_to_read = np.array([i for i, s in enumerate(sorted_trajectories[0].get_symbols()) if s in symbols])
-    else:
-        indices_to_read = np.arange(sorted_positions.shape[1])
-    if len(indices_to_read) != len(indices_to_overwrite):
-        raise IndexError("The indices for reading or writing have different lengths")
-
-    new_positions = np.repeat(np.array([positions]), nr_of_configurations, axis=0)
-    time_split = (sorted_positions.shape[0] - 1)/ (nr_of_configurations -1)
-    # time_split:
-    # the top -1 is to not get index out of bonds
-    # when shape 0 is divisible by nr_of_configurations
-    # The bottom -1 is because I need N-1 slices, starting from 0, ending at the end of the trajectory.
-    time_indices = np.arange(0, sorted_positions.shape[0], time_split)[:nr_of_configurations]
-    remap = parameters_d.get('remap_into_cell', False)
-    for idx in range(nr_of_configurations):
-        if remap:
-            frac_coords = get_frac_coords(sorted_positions[time_indices[idx], indices_to_read, :], sorted_cells[time_indices[idx]])
-            new_positions[idx, indices_to_overwrite, :] = get_cart_coords(frac_coords, structure.cell)
-        else:
-            new_positions[idx, indices_to_overwrite, :] = sorted_positions[time_indices[idx], indices_to_read, :]
-    print 'new_positions', new_positions.shape
-    array = ArrayData()
-    atoms = structure.get_ase() # [indices_to_read]
-    array.set_array('symbols', np.array(atoms.get_chemical_symbols()))
-    array.set_array('positions', new_positions)
-    array._set_attr('units|positions', 'angstrom')
-    return dict(positions=array)
-
-
-class FittingCalculation(ChillstepCalculation):
-    @abstractmethod
     def start(self):
         """
         Method to start (i.e. how to create the positions) 
         has to be defined by the subclass
         """
-        pass
+        self.inp.structure
+        self.inp.remote_folder_flipper
+        # self.inp.electron_parameters
+        self.inp.parameters
+        # self.inp.flipper_code
+        # self.inp.pseudo_Li
+        # an array that I will calculate the forces on!
+        self.ctx.nstep = self.inp.positions.get_array('positions').shape[0]
+
+        self.inp.parameters
+        self.goto(self.launch_replays)
 
     def launch_calculations(self):
         #~ rattled_positions = self.out.rattled_positions
         #################################
-        raise DeprecationWarning()
+        # raise DeprecationWarning()
         #################################
         rattled_positions = self.start()['rattled_positions']
         nstep = self.ctx.nstep
@@ -187,15 +54,13 @@ class FittingCalculation(ChillstepCalculation):
         try:
             chargecalc, = remote_folder.get_inputs(node_type=CalculationFactory('quantumespresso.pw'))
         except Exception as e:
-            print e
             # This must have been a copied remote folder
             chargecalc = remote_folder.inp.copied_remote_folder.inp.remote_folder.inp.remote_folder
-        print chargecalc
 
         structure = self.inp.structure
         pseudofamily = self.inp.parameters.dict.pseudofamily
-        pseudos=get_pseudos(structure=structure,pseudo_family_name=pseudofamily)
-        ecutwfc, ecutrho = get_suggested_cutoff(pseudofamily, pseudos.values())
+        pseudos=pseudofamily.get_pseudos(structure=structure)
+        ecutwfc, ecutrho = pseudofamily.get_recommended_cutoffs(structure=structure, unit='Ry')
 
         flipper_calc = self.inp.flipper_code.new_calc()
         flipper_calc._set_parent_remotedata(remote_folder)
@@ -225,7 +90,7 @@ class FittingCalculation(ChillstepCalculation):
         parameters_input_flipper['CONTROL']['nstep'] = nstep
         parameters_input_flipper['IONS'] = {}
 
-        flipper_calc.use_parameters(get_or_create_parameters(parameters_input_flipper))
+        flipper_calc.use_parameters(get_or_create_input_node(orm.Dict, parameters_input_flipper, store=False))
         flipper_resources = {'num_machines': chargecalc.get_resources()['num_machines']}
         if chargecalc.get_resources().get('num_mpiprocs_per_machine', 0):
             flipper_resources['num_mpiprocs_per_machine'] = chargecalc.get_resources().get('num_mpiprocs_per_machine')
@@ -246,13 +111,29 @@ class FittingCalculation(ChillstepCalculation):
         # I can use different kpoints and settings than charge calc, relay from input
         dft_calc.use_kpoints(self.inp.kpoints)
         dft_calc.use_settings(self.inp.settings)
+
+        parameters_input_dft = {
+                                    u'CONTROL': {
+                                        u'calculation': 'md',
+                                        u'restart_mode': 'from_scratch',
+                                        u'dt':40,
+                                        u'iprint':1,
+                                        u'verbosity':'low',
+                                        u'ldecompose_forces':True,
+                                        u'lhustle':True,
+                                    },
+                                    u'SYSTEM': {
+                                        u'nosym': True,
+                                    },
+                                    u'IONS':{}
+                                }
         
         parameters_input_dft['SYSTEM']['ecutwfc'] = ecutwfc
         parameters_input_dft['SYSTEM']['ecutrho'] = ecutrho
         parameters_input_dft['CONTROL']['nstep'] = nstep
         parameters_input_dft['ELECTRONS'] = self.inp.electron_parameters.get_dict()
 
-        dft_calc.use_parameters(get_or_create_parameters(parameters_input_dft))
+        dft_calc.use_parameters(get_or_create_input_node(orm.Dict, parameters_input_dft, store=False))
         dft_resources = {"num_machines": self.inp.parameters.dict.dft_num_machines}
         if self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine", 0):
             dft_resources["num_mpiprocs_per_machine"] = self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine")
@@ -285,7 +166,7 @@ class FittingCalculation(ChillstepCalculation):
         if own_parameters.get('dft_num_mpiprocs_per_machine', 0):
             dft_resources['num_mpiprocs_per_machine'] = own_parameters.get('dft_num_mpiprocs_per_machine')
         inputs_dft = dict(
-            moldyn_parameters=get_or_create_parameters(dict(
+            moldyn_parameters=get_or_create_input_node(orm.Dict, dict(
                     nstep=self.ctx.nstep,
                     max_wallclock_seconds=own_parameters['dft_walltime_seconds'],
                     resources=dft_resources,
@@ -299,7 +180,7 @@ class FittingCalculation(ChillstepCalculation):
         if own_parameters.get('flipper_num_mpiprocs_per_machine', 0):
             flipper_resources['num_mpiprocs_per_machine'] = own_parameters.get('flipper_num_mpiprocs_per_machine')
         inputs_flipper = dict(
-            moldyn_parameters=get_or_create_parameters(dict(
+            moldyn_parameters=get_or_create_input_node(orm.Dict, dict(
                     nstep=self.ctx.nstep,
                     max_wallclock_seconds=own_parameters['flipper_walltime_seconds'],
                     resources=flipper_resources,
@@ -347,7 +228,7 @@ class FittingCalculation(ChillstepCalculation):
         self.goto(self.analyze)
 
         # Launch replays
-        ret = {'hustler_flipper':ReplayCalculation(**inputs_flipper), 'hustler_dft':ReplayCalculation(**inputs_dft)}
+        ret = {'hustler_flipper':ReplayMDHWorkChain(**inputs_flipper), 'hustler_dft':ReplayMDHWorkChain(**inputs_dft)}
         ret['hustler_flipper'].label = own_inputs['structure'].label + '_hustler_flipper'
         ret['hustler_dft'].label = own_inputs['structure'].label + '_hustler_DFT'
         return ret
@@ -373,7 +254,7 @@ class FittingCalculation(ChillstepCalculation):
 
         # IMPORTANT TODO: Exclude forces where scf failed! The hustler (maybe?) doesn't fail if SCF doesn't converge...
 
-        params_d = get_or_create_parameters(dict(
+        params_d = get_or_create_input_node(orm.Dict, dict(
             signal_indices = (1,3,4) if parameters_d['is_local'] else (1,2,3,4),
             symbol=parameters_d['pinball_kind_symbol'],
             stepsize=1,
@@ -381,7 +262,7 @@ class FittingCalculation(ChillstepCalculation):
             starting_point=0, # The first step is cut within the function!
             divide_r2=parameters_d['divide_r2']
             ), store=True)
-        calc, res = get_pinball_factors_inline(
+        calc, res = get_pinball_factors(
                 parameters=params_d,
                 trajectory_scf=trajectory_scf,
                 trajectory_pb=trajectory_pb)
@@ -389,7 +270,7 @@ class FittingCalculation(ChillstepCalculation):
         coefficients.label = '{}-PBcoeffs'.format(self.inp.structure.label)
         try:
             # Maybe I'm supposed to store the result?
-            g,_ = Group.get_or_create(name=self.inp.parameters.dict.results_group_name)
+            g,_ = orm.Group.get_or_create(name=self.inp.parameters.dict.results_group_name)
             g.add_nodes(coefficients)
         except Exception as e:
             pass
@@ -397,25 +278,3 @@ class FittingCalculation(ChillstepCalculation):
         self.goto(self.exit)
         return {'get_pinball_factors':calc, 'coefficients':coefficients}
 
-
-class FittingFromTrajectoryCalculation(FittingCalculation):
-    @property
-    def positions(self):
-        return self.inp.positions
-
-    def start(self):
-        """
-        Method to start (i.e. how to create the positions) 
-        has to be defined by the subclass
-        """
-        self.inp.structure
-        self.inp.remote_folder_flipper
-        # self.inp.electron_parameters
-        self.inp.parameters
-        # self.inp.flipper_code
-        # self.inp.pseudo_Li
-        # an array that I will calculate the forces on!
-        self.ctx.nstep = self.inp.positions.get_array('positions').shape[0]
-
-        self.inp.parameters
-        self.goto(self.launch_replays)

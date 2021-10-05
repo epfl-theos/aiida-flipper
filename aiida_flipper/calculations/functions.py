@@ -265,3 +265,76 @@ def update_parameters_with_coefficients(parameters, coefficients):
     parameters_main_d['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
 
     return {'updated_parameters': get_or_create_input_node(orm.Dict, parameters_main_d, store=True)}
+
+
+# @calcfunction
+def get_pinball_factors(parameters, trajectory_scf, trajectory_pb):
+    from aiida_flipper.utils.utils import Force, fit_with_lin_reg, make_fitted, plot_forces
+    from scipy.stats import linregress
+
+    params_dict = parameters.get_dict()
+    starting_point = params_dict['starting_point']
+    stepsize = params_dict['stepsize']
+    nsample = params_dict.get('nsample', None)
+    signal_indices = params_dict.get('signal_indices', None)
+
+    atom_indices_scf = [i for i, s in enumerate(trajectory_scf.get_attribute('symbols')) if s == params_dict['symbol']]
+    atom_indices_pb = [i for i, s in enumerate(trajectory_pb.get_attribute('symbols')) if s == params_dict['symbol']]
+
+    all_forces_scf = trajectory_scf.get_array('forces')[:, atom_indices_scf,:]
+    all_forces_pb = trajectory_pb.get_array('forces')[:, atom_indices_pb,:]
+
+    # You need to remove all the steps that are starting indices due to this stupid thing with the hustler first step. 
+    starting_indices = set()
+    for traj in (trajectory_pb, trajectory_scf):
+        [starting_indices.add(_) for _ in np.where(trajectory_scf.get_array('steps') == 0)[0]]
+
+    # You also need to remove steps for the trajectory_scf that did not SCF CONVERGE!!!!
+    convergence = trajectory_scf.get_array('scf_convergence')
+    [starting_indices.add(_) for _ in np.where(~convergence)[0]]
+
+    for idx in sorted(starting_indices, reverse=True):
+        all_forces_scf = np.delete(all_forces_scf, idx, axis=0)
+        all_forces_pb  = np.delete(all_forces_pb,  idx, axis=0)
+
+    if nsample == None:
+        nsample = min((len(all_forces_scf), len(all_forces_pb)))
+
+    forces_scf = Force(all_forces_scf[starting_point:starting_point+nsample*stepsize:stepsize])
+    forces_pb = Force(all_forces_pb[starting_point:starting_point+nsample*stepsize:stepsize])
+
+    coefs, mae = fit_with_lin_reg(forces_scf, forces_pb,
+            verbosity=0, divide_r2=params_dict['divide_r2'], signal_indices=signal_indices)
+    try:
+        mae_f = float(mae)
+    except:
+        mae_f = None
+
+    forces_fitted = make_fitted(forces_pb, coefs=coefs, signal_indices=signal_indices)
+    slope_before_fit, intercept_before_fit, rvalue_before_fit, pvalue_before_fit, stderr_before_fit = linregress(
+            forces_scf.get_signal(0).flatten(), forces_fitted.get_signal(0).flatten())
+    slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(
+            forces_scf.get_signal(0).flatten(), forces_pb.get_signal(0).flatten())
+    plot_forces([forces_scf, forces_pb, forces_fitted], labels=('DFT', 'pinball', 'pinball-fitted'), format_='0:0,1:0;0:0,2:0', titles=("Before Fit", "After Fit"),savefig=None)
+
+    coeff_params = orm.Dict(dict={
+        'coefs': coefs.tolist(),
+        'mae': mae_f,
+        'nr_of_coefs': len(coefs),
+        'indices_removed': sorted(starting_indices),
+        'linreg_before_fit': {
+            'slope': slope_before_fit,
+            'intercept': intercept_before_fit,
+            'r2value': rvalue_before_fit**2,
+            'pvalue_zero_slope': pvalue_before_fit,
+            'stderr': stderr_before_fit
+            },
+        'linreg_after_fit': {
+            'slope': slope_after_fit,
+            'intercept': intercept_after_fit,
+            'r2value': rvalue_after_fit**2,
+            'pvalue_zero_slope': pvalue_after_fit,
+            'stderr': stderr_after_fit
+            },
+    })
+    return {'coefficients': coeff_params}

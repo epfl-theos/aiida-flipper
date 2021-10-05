@@ -231,6 +231,10 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param stash_directory: the location of charge densities of host lattice
+        :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces will be evaluated
+        :param total_energy_max_fluctuation: If the total energy exceeeds this threshold I will stop the workchain
+        :param previous_trajectory: if provided I will start the calculation from the positions and velocities of that trajectory
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
         :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.

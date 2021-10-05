@@ -19,7 +19,7 @@ class HustlerCalculation(PwCalculation):
     _FOR_FILE = 'verlet.for'
     _VEL_FILE = 'verlet.vel'
     _POS_FILE = 'verlet.pos'
-    _HUSTLER_FILE = 'hustler.pos'
+    # _HUSTLER_FILE = 'hustler.pos'
     
     @classmethod
     def define(cls, spec):
@@ -106,8 +106,12 @@ class HustlerCalculation(PwCalculation):
         ]
         if self._use_kpoints:
             arguments.append(self.inputs.kpoints)
-        input_filecontent, local_copy_pseudo_list = self._generate_PWCPinputdata(*arguments)
+        input_filecontent, hustler_filecontent, local_copy_pseudo_list = self._generate_PWCPinputdata(*arguments)
         local_copy_list += local_copy_pseudo_list
+
+        # generating the hustler.pos file, no need to link it to `local_copy_list`
+        with folder.open(self.inputs.parameters.get_dict()['CONTROL'].get('hustlerfile'), 'w') as hustler:
+            hustler.write(hustler_filecontent)
 
         with folder.open(self.metadata.options.input_filename, 'w') as handle:
             handle.write(input_filecontent)
@@ -259,11 +263,11 @@ class HustlerCalculation(PwCalculation):
                 "Length of symbols does not match array dimensions"
             )
 
-        with open(cls._HUSTLER_FILE, 'w') as hustlerfile:
-            for istep, tau_of_t in enumerate(hustler_positions):
-                hustlerfile.write('> {}\n'.format(istep))
-                for symbol, pos in zip(symbols, tau_of_t):
-                    hustlerfile.write('{:<3}   {}\n'.format(symbol, '   '.join(['{:16.10f}'.format(f) for f in pos])))
+        hustlerfile = u''
+        for istep, tau_of_t in enumerate(hustler_positions):
+            hustlerfile += u'> {}\n'.format(istep)
+            for symbol, pos in zip(symbols, tau_of_t):
+                hustlerfile += u'{:<3}   {}\n'.format(symbol, '   '.join(['{:16.10f}'.format(f) for f in pos]))
                             
         # pylint: disable=too-many-branches,too-many-statements
         from aiida.common.utils import get_unique_filename
@@ -305,7 +309,7 @@ class HustlerCalculation(PwCalculation):
         input_params['CONTROL']['prefix'] = cls._PREFIX
         input_params['CONTROL']['lhustle'] = True
         input_params['CONTROL']['hustler_nat'] = nhustled
-        input_params['CONTROL']['hustlerfile'] = cls._HUSTLER_FILE
+        input_params['CONTROL']['hustlerfile'] = input_params['CONTROL'].get('hustlerfile')
         input_params['CONTROL']['verbosity'] = input_params['CONTROL'].get('verbosity', cls._default_verbosity)
 
         # ============ I prepare the input site data =============
@@ -575,4 +579,4 @@ class HustlerCalculation(PwCalculation):
                 '{}'.format(','.join(list(input_params.keys())))
             )
 
-        return inputfile, local_copy_list_to_append
+        return inputfile, hustlerfile, local_copy_list_to_append
