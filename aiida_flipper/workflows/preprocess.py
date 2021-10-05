@@ -48,6 +48,7 @@ def delithiate_structure(structure, element_to_remove):
     delithiated_structure.set_attribute('missing_Li', len(pinball_sites))
     pinball_structure.set_cell(structure.cell)
     pinball_structure.set_attribute('pinball_structure', True)
+    pinball_structure.set_attribute('hustler_nat', len(pinball_sites))
 
     [pinball_structure.append_kind(_) for _ in pinball_kinds]
     [pinball_structure.append_site(_) for _ in pinball_sites]
@@ -214,7 +215,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         try:
             stashed_folder_data = workchain.outputs.remote_stash
             self.ctx.stashed_data = orm.RemoteData(remote_path=stashed_folder_data.attributes['target_basepath'], computer=stashed_folder_data.computer)
-        except exceptions.NotExistent:
+        except Exception:
             self.report(f'Host Lattice scf finished with exit status {workchain.exit_status}, but stashed directories not found.')
             return self.exit_codes.ERROR_SCF_FINISHED_WITH_ERROR
 

@@ -73,12 +73,13 @@ class FlipperParser(PwParser):
         raise_if_nan_in_values = not (calc_input_dict['CONTROL'].get('lhustle', False))
         # If ******* occurs (i.e. value not printed), I will raise immediately if this
         # flag is set to True. Before, this was checked at the very end, which wastes computer time.
-
-        try:
-            # This refers to the SAMPLING timestep for the trajectory:
-            timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
-        except KeyError:
-            return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
+        if raise_if_nan_in_values:
+            try:
+                # This refers to the SAMPLING timestep for the trajectory:
+                timestep_in_fs = timeau_to_sec * 2e15 * input_dict['CONTROL']['dt'] * input_dict['CONTROL'].get('iprint', 1)
+            except KeyError:
+                return self.exit(self.exit_codes.ERROR_UNKNOWN_TIMESTEP)
+        else: timestep_in_fs = 1
 
         in_struc = self.node.inputs.structure
 

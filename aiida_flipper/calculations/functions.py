@@ -118,7 +118,7 @@ def get_diffusion_from_msd(structure, parameters, trajectory):
     # Following attributes are results_dict of samos.analysis.DynamicsAnalyzer.get_msd()
     for attr, val in msd_iso.get_attrs().items():
         arr_data.set_attribute(attr, val)
-    return arr_data
+    return {'msd_results': arr_data}
 
 
 @calcfunction
@@ -257,7 +257,7 @@ def update_parameters_with_coefficients(parameters, coefficients):
     TODO: nonlocal vs local, currently only nonlocal is correclty implemented
     """
         
-    coefs = coefficients.get_attr('coefs')
+    coefs = coefficients.get_attribute('coefs')
     parameters_main_d = parameters.get_dict()
     parameters_main_d['SYSTEM']['flipper_local_factor'] = coefs[0]
     parameters_main_d['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]

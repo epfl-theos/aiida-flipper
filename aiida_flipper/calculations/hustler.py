@@ -13,7 +13,6 @@ from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 from aiida.plugins import CalculationFactory
 FlipperCalculation = CalculationFactory('quantumespresso.flipper')
 
-
 class HustlerCalculation(PwCalculation):
     
     _EVP_FILE = 'verlet.evp'
@@ -52,11 +51,10 @@ class HustlerCalculation(PwCalculation):
         spec.exit_code(606, 'ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSION_2',
             message='The trajectory files contain files with an unexpect number of entries for each line')
         
-        
     def prepare_for_submission(self, folder):
         """
         Create the input files from the input nodes passed to this instance of the `CalcJob`.
-        Copy of the original fucntion with one change - hustler_arr which is the trajectory containing
+        Copy of the original function with one change - hustler_snapshots which is the trajectory containing
         snapshots to generate hustler.pos file is passed as an additional input. 
 
         :param folder: an `aiida.common.folders.Folder` to temporarily write files on disk
@@ -104,6 +102,7 @@ class HustlerCalculation(PwCalculation):
             settings,
             self.inputs.pseudos,
             self.inputs.structure,
+            self.inputs.hustler_snapshots,
         ]
         if self._use_kpoints:
             arguments.append(self.inputs.kpoints)
@@ -213,7 +212,7 @@ class HustlerCalculation(PwCalculation):
             unknown_keys = ', '.join(list(settings.keys()))
             raise exceptions.InputValidationError(f'`settings` contained unexpected keys: {unknown_keys}')
 
-        calcinfo.retrieve_temporary_list = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE, self._HUSTLER_FILE]
+        calcinfo.retrieve_temporary_list = [self._EVP_FILE, self._FOR_FILE, self._VEL_FILE, self._POS_FILE]
         return calcinfo
         
     @classproperty
@@ -233,14 +232,15 @@ class HustlerCalculation(PwCalculation):
         return retdict
 
     @classmethod
-    def _generate_PWCPinputdata(cls, parameters, settings, pseudos, structure, hustler_arr, kpoints=None, use_fractional=False):  # pylint: disable=invalid-name
+    def _generate_PWCPinputdata(cls, parameters, settings, pseudos, structure, hustler_snapshots, kpoints=None, use_fractional=False):  # pylint: disable=invalid-name
         """
         Copied from original _general_PWCPinputdata, with two key changes - 
         kind list is NOT sorted alphabetically, and an extra input of hustler-positions.
         """
+
         ##### THE hustler file:
-        hustler_positions = hustler_arr.get_array('positions')
-        pos_units = hustler_arr.get_attr('units|positions', 'angstrom')
+        hustler_positions = hustler_snapshots.get_array('positions')
+        pos_units = hustler_snapshots.get_attribute('units|positions', 'angstrom')
 
         if pos_units in ('atomic', 'bohr'):
             pass
@@ -250,9 +250,9 @@ class HustlerCalculation(PwCalculation):
             raise exceptions.InputValidationError("Unknown position units {}".format(pos_units))
         # I need to check what units the positions were given
         try:
-            symbols = hustler_arr.get_attr('symbols')
+            symbols = hustler_snapshots.get_attribute('symbols')
         except Exception:
-            symbols = hustler_arr.get_array('symbols')
+            symbols = hustler_snapshots.get_array('symbols')
         nstep, nhustled, _ = hustler_positions.shape
         if len(symbols) != nhustled:
             raise exceptions.InputValidationError(

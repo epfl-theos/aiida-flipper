@@ -1,59 +1,25 @@
-from abc import abstractmethod
-from aiida.orm import Data, load_node, Calculation, CalculationFactory, Group
-from aiida.orm.calculation.chillstep import ChillstepCalculation
-from aiida.orm.calculation.inline import optional_inline, make_inline
-from aiida.orm.data.array import ArrayData
-from aiida.orm.data.parameter import ParameterData
+# -*- coding: utf-8 -*-
+"""Workchain to generate pinball hyperparameters"""
+from aiida.engine.processes import workchains
+from samos.trajectory import Trajectory
+from aiida import orm
+from aiida.common import AttributeDict, exceptions  
+from aiida.engine import BaseRestartWorkChain, WorkChain, ToContext, if_, while_, append_
+from aiida.plugins import CalculationFactory, WorkflowFactory
+import numpy as np
 
-from aiida_flipper.utils import (get_or_create_parameters, get_pseudos, get_suggested_cutoff)
+from aiida_quantumespresso.utils.mapping import prepare_process_inputs
+from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
+from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
+from aiida_flipper.utils.utils import get_or_create_input_node
 
-import numpy as np, copy
-from replay import ReplayCalculation
-
-HUSTLER_DFT_PARAMS_DICT = {
-    u'CONTROL': {
-        u'calculation': 'md',
-        u'restart_mode': 'from_scratch',
-        u'dt':40,
-        u'iprint':1,
-        u'verbosity':'low',
-        u'ldecompose_forces':True,
-        u'lhustle':True,
-    },
-    u'SYSTEM': {
-        u'nosym': True,
-    },
-    u'IONS':{}
-}
+ReplayMDHWorkChain = WorkflowFactory('quantumespresso.flipper.replaymdhustler')
 
 def get_frac_coords(cart_coords, cell_matrix):
     return np.dot(cart_coords, np.linalg.inv(cell_matrix))
 
 def get_cart_coords(frac_coords, cell_matrix):
     return np.dot(frac_coords, cell_matrix)
-
-@make_inline
-def rattle_randomly_structure_inline(structure, parameters):
-    #~ from ase.constraints import FixAtoms
-    #~ from random import randint
-    elements_to_rattle = parameters.dict.elements
-    stdev = parameters.dict.stdev
-    nr_of_configurations = parameters.dict.nr_of_configurations
-    indices_to_rattle = [i for i,k in enumerate(structure.get_site_kindnames()) if k in elements_to_rattle]
-    positions = structure.get_ase().positions
-    new_positions = np.repeat(np.array([positions]), nr_of_configurations, axis=0)
-    for idx in indices_to_rattle:
-        new_positions[:,idx,:] += np.random.normal(0, stdev, (nr_of_configurations, 3))
-
-
-    # final_positions = np.concatenate(([positions], new_positions))
-    
-    array = ArrayData()
-    array.set_array('symbols', np.array(structure.get_site_kindnames()))
-    array.set_array('positions', new_positions)
-    array._set_attr('units|positions', 'angstrom')
-    return dict(rattled_positions=array)
-
 
 @make_inline
 def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
@@ -129,34 +95,6 @@ def get_pinball_factors_inline(parameters, trajectory_scf, trajectory_pb):
     })
     return {'coefficients': coeff_params}
 
-@make_inline
-def get_structures_from_trajectories_inline(parameters, label='', description='', **branches):
-    """
-    extract structures from a list of trajectories (branches)
-    parameters:
-        nr_of_configurations
-    """
-    parameters_d = parameters.get_dict()
-    nr_of_configurations = parameters_d['nr_of_configurations']
-
-    # taking the trajectories, sorted by key name:
-    sorted_trajectories = zip(*sorted(branches.items()))[1]
-
-#    sorted_steps = np.concatenate([t.get_steps() for t in sorted_trajectories])
-    numsteps = [t.numsteps for t in sorted_trajectories]
-    cumnumsteps = np.cumsum(numsteps)
-    totsteps = sum(numsteps)
-    deltasteps = totsteps / nr_of_configurations  # jump between steps
-    structures = {}
-    for step in (np.arange(nr_of_configurations) * deltasteps):
-        branch_id = np.argmin(cumnumsteps <= step)  # branch containing the step
-        branch_step_id = step - cumnumsteps[branch_id - 1]
-        structures['step_' + str(step)] = sorted_trajectories[branch_id].get_step_structure(branch_step_id)
-        structures['step_' + str(step)].label = label + '-step_{:d}'.format(step)
-        structures['step_' + str(step)].description = description + 'Step extracted: {:d}'.format(step)
-    return structures
-
-
 
 @make_inline
 def get_configurations_from_trajectories_inline(parameters, structure, **branches):
@@ -182,7 +120,7 @@ def get_configurations_from_trajectories_inline(parameters, structure, **branche
         symbols = parameters_d['symbols_to_overwrite']
         if isinstance(symbols, (set, tuple, list)):
             pass
-        elif isinstance(symbols, basestring):
+        elif isinstance(symbols, str):
             symbols = [symbols]
         else:
             raise TypeError("Symbols has to be str or a list of strings")
@@ -309,7 +247,6 @@ class FittingCalculation(ChillstepCalculation):
         dft_calc.use_kpoints(self.inp.kpoints)
         dft_calc.use_settings(self.inp.settings)
         
-        parameters_input_dft = copy.deepcopy(HUSTLER_DFT_PARAMS_DICT)
         parameters_input_dft['SYSTEM']['ecutwfc'] = ecutwfc
         parameters_input_dft['SYSTEM']['ecutrho'] = ecutrho
         parameters_input_dft['CONTROL']['nstep'] = nstep
@@ -482,41 +419,3 @@ class FittingFromTrajectoryCalculation(FittingCalculation):
 
         self.inp.parameters
         self.goto(self.launch_replays)
-
-
-class FittingFlipper1RandomlyDisplacedPosCalculation(FittingCalculation):
-    @property
-    def positions(self):
-        return self.out.rattle_structure
-
-    def start(self):
-        # So, I have a structure that should be at the energetic minumum.
-        # I will produce a trajectory that comes from randomly displacing
-        # the pinball atoms.
-
-        self.inp.structure
-        self.inp.remote_folder_flipper
-        # self.inp.electron_parameters
-        self.inp.parameters
-        # self.inp.flipper_code
-        # self.inp.pseudo_Li
-
-        parameters_d = self.inp.parameters.get_dict()
-        pks = parameters_d['pinball_kind_symbol']
-        nr_of_pinballs = self.inp.structure.get_site_kindnames().count(pks)
-        # Nr of configurations: How many configuration do I need to achieve the data points I want?
-        nr_of_configurations = int(float(parameters_d['nr_of_force_components']) / nr_of_pinballs / 3) + 1 # Every pinball atoms has 3 force components
-        rattling_parameters_d = {
-            'elements':[pks],
-            'nr_of_configurations': nr_of_configurations,
-            'stdev':parameters_d['stdev']
-        }
-        # TODO: CALL link
-        c, res = rattle_randomly_structure_inline(
-                structure=self.inp.structure,
-                parameters=get_or_create_parameters(rattling_parameters_d))
-        
-        self.ctx.nstep = res['rattled_positions'].get_attr('array|positions')[0]
-        res['rattle_structure'] = c
-        self.goto(self.launch_replays)
-        return res

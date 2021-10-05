@@ -3,7 +3,7 @@
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
 from aiida.common.links import LinkType
-from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
+from aiida.engine import ToContext, append_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
 from aiida.plugins import CalculationFactory, GroupFactory, WorkflowFactory
 
 ## builder imports
@@ -24,8 +24,8 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
 
 PwCalculation = CalculationFactory('quantumespresso.pw')
-FlipperCalculation = CalculationFactory('quantumespresso.flipper')
-#HustlerCalculation = CalculationFactory('quantumespresso.hustler')
+# FlipperCalculation = CalculationFactory('quantumespresso.flipper')
+HustlerCalculation = CalculationFactory('quantumespresso.hustler')
 
 
 def get_completed_number_of_steps(calc):
@@ -38,7 +38,7 @@ def get_completed_number_of_steps(calc):
                 (traj.get_attribute('array|positions')[0] - 1)  # the zeroth step is also saved
     return nstep
 
-def get_total_trajectory(workchain, previous_trajectory=None, store=False):
+def get_total_trajectory(workchain, store=False):
     """Collect all the trajectory segment and concatenate them."""
     qb = orm.QueryBuilder()
     qb.append(orm.WorkChainNode, filters={'uuid': workchain.uuid}, tag='replay')
@@ -51,10 +51,6 @@ def get_total_trajectory(workchain, previous_trajectory=None, store=False):
     qb.append(orm.TrajectoryData, with_incoming='calc', edge_filters={'label': 'output_trajectory'},
             project=['*'], tag='traj')
     traj_d = {item['rc']['label'].replace('iteration_', 'trajectory_'): item['traj']['*'] for item in qb.iterdict()}  ## if not extras.discard_trajectory
-
-    # adding the trajectory of previous MD run, if it exists
-    if previous_trajectory:
-        traj_d.update({'trajectory_00': previous_trajectory})
 
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
@@ -81,7 +77,7 @@ def get_slave_calculations(workchain):
     return list(zip(*sorted_calcs))[1] if sorted_calcs else None
 
 
-class ReplayMDWorkChain(PwBaseWorkChain):
+class ReplayMDHustlerWorkChain(PwBaseWorkChain):
     """
     Workchain to run a molecular dynamics Quantum ESPRESSO pw.x calculation with automated error handling and restarts.
 
@@ -106,7 +102,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
     # to use either a `PwCalculation`, `FlipperCalculation`, or `HustlerCalculation` without redefining this class.
     # The drawback is probably that (I guess) the inputs will not be exposed (in the builder?)?
     # Alternatively, one could just define subclasses where `_process_class` is set accordingly.
-    _process_class = FlipperCalculation  # probably we can define this in a subclass
+    _process_class = HustlerCalculation  # probably we can define this in a subclass
 
     defaults = AttributeDict({
         'qe': qe_defaults,
@@ -137,30 +133,19 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         spec.inputs.pop('automatic_parallelization')
 
         spec.input('nstep', valid_type=orm.Int, required=False,
-            help='Number of MD steps (it will be read from the input parameters otherwise).')
-        #spec.input('is_hustler', valid_type=orm.Bool, required=False, default=lambda: orm.Bool(False))
-        spec.input('total_energy_max_fluctuation', valid_type=orm.Float, required=False,
-            help='The maximum total energy fluctuation allowed (eV). If the total energy has varied more than this '
-                 'threshold, the workchain will fail.')
-        spec.input('previous_trajectory', valid_type=orm.TrajectoryData, required=False,
-            help='Trajectory of previous calculation, needed to pickup from last MD run (otherwise we do a normal start from flipper compatible structure).')
+            help='Number of MD steps it will be read from the input parameters otherwise; these many snapshots will be extracted from input trajectory.')
+        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=True,
+            help='Trajectory containing the uncorrelated confifurations to be used in hustler calculation.')
 
         spec.outline(
             cls.setup,
             cls.validate_parameters,
             cls.validate_kpoints,
             cls.validate_pseudos,
-            # cls.validate_resources,
-            #if_(cls.should_run_init)(
-            #    cls.validate_init_inputs,
-            #    cls.run_init,
-            #    cls.inspect_init,
-            #),
             while_(cls.should_run_process)(
                 cls.prepare_process,
                 cls.run_process,
                 cls.inspect_process,
-                cls.check_energy_fluctuations,
                 cls.update_mdsteps,
             ),
             cls.results,
@@ -207,7 +192,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
         from importlib_resources import files
         from aiida_flipper.workflows import protocols as proto
-        return files(proto) / 'replay.yaml'
+        return files(proto) / 'replayh.yaml'
 
     @classmethod
     def get_builder_from_protocol(
@@ -215,9 +200,9 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         code,
         structure,
         stash_directory,
+        calculation_type,
+        hustler_snapshots,
         nstep=None,
-        total_energy_max_fluctuation=None,
-        previous_trajectory=None,
         protocol=None,
         overrides=None,
         electronic_type=ElectronicType.INSULATOR,
@@ -297,6 +282,16 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             parameters['SYSTEM']['nspin'] = 2
             parameters['SYSTEM']['starting_magnetization'] = starting_magnetization
 
+        if calculation_type == 'pinball': 
+            pass
+        elif calculation_type == 'DFT':
+            parameters['CONTROL'].pop('lflipper')
+            parameters['CONTROL'].pop('ldecompose_forces')
+            parameters['CONTROL'].pop('ldecompose_ewald')
+            parameters['CONTROL'].pop('flipper_do_nonloc')
+        else: 
+            raise NotImplementedError('Only DFT or pinball type calculations possible.')
+
         # pylint: disable=no-member
         builder = cls.get_builder()
         builder.pw['code'] = code
@@ -307,6 +302,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         if 'parallelization' in inputs['pw']:
             builder.pw['parallelization'] = orm.Dict(dict=inputs['pw']['parallelization'])
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
+        builder['hustler_snapshots'] = hustler_snapshots
         if 'settings' in inputs['pw']:
             builder['pw'].settings = orm.Dict(dict=inputs['pw']['settings'])
             if inputs['pw']['settings']['gamma_only']:
@@ -314,16 +310,14 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 kpoints.set_kpoints_mesh([1,1,1])
                 builder.kpoints = kpoints
             else: 
-                raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
+                raise NotImplementedError('Only gamma k-points possible in hustler calculations.')
 
         builder['pw']['parent_folder'] = stash_directory
         if nstep: builder['nstep'] = nstep
-        else: builder['nstep'] = orm.Int(inputs['nstep'])
-        if total_energy_max_fluctuation: 
-            builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
-        else: 
-            builder['total_energy_max_fluctuation'] = orm.Float(inputs['total_energy_max_fluctuation'])  
-        if previous_trajectory: builder['previous_trajectory'] = previous_trajectory
+        else:
+            # get this from missing_Li attribute from the structure
+            builder['nstep'] = orm.Int(inputs['nstep'])
+
         # pylint: enable=no-member
         return builder
 
@@ -338,10 +332,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         if not self.ctx.inputs.parameters['CONTROL']['calculation'] == 'md':
             return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS
-        if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
-            raise NotImplementedError('Non-pinball MD is not implemented yet.')
-        if self.inputs.get('is_hustler', False):
-            raise NotImplementedError('Hustler not implemented.')
+        if not self.ctx.inputs.parameters['CONTROL'].get('lhustle', False):
+            raise NotImplementedError('Please run flipper workchain.')
 
         nstep = self.ctx.inputs.parameters['CONTROL'].get('nstep', None)
         inp_nstep = self.inputs.get('nstep')
@@ -354,6 +346,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         elif inp_nstep:
             nstep = inp_nstep.value
         self.ctx.mdsteps_todo = nstep
+        self.ctx.nsteps = nstep
 
         self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
 
@@ -384,35 +377,28 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         self.ctx.inputs.parameters.setdefault('CONTROL', {})
         self.ctx.inputs.parameters['CONTROL'].setdefault('calculation', 'md')
-        #self.ctx.is_hustler = self.inputs.is_hustler
 
-        # If trajectory is provided, check that the parameters are same across the 2 MD runs
-        if self.inputs.get('previous_trajectory'):
-            self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
-
+        # Checking if the hustler snapshot was generated with same structure that is input to me
+        hustler_snapshots = self.inputs.get('hustler_snapshots')
+        qb = orm.QueryBuilder()
+        qb.append(orm.TrajectoryData, filters={'id':{'==':hustler_snapshots.pk}}, tag='traj')
+        qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='traj', tag='replay')
+        if qb.count():
+            wc, = qb.first()
+        else:
+            self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
             qb = orm.QueryBuilder()
-            qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
-            qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='traj', tag='replay')
+            qb.append(orm.TrajectoryData, filters={'id':{'==':hustler_snapshots.pk}}, tag='traj')
+            qb.append(orm.CalcFunctionNode, with_outgoing='traj', tag='calcfunc')
+            qb.append(orm.TrajectoryData, with_outgoing='calcfunc', tag='old_traj')
+            qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='old_traj', tag='replay')
             if qb.count():
                 wc, = qb.first()
             else:
-                self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
-                qb = orm.QueryBuilder()
-                qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
-                qb.append(orm.CalcFunctionNode, with_outgoing='traj', tag='calcfunc')
-                qb.append(orm.TrajectoryData, with_outgoing='calcfunc', tag='old_traj')
-                qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='old_traj', tag='replay')
-                if qb.count():
-                    wc, = qb.first()
-                else:
-                    self.report('Calcfunction associated with previous trajectory not found.')
-            if wc:
-                param_d = wc.inputs['pw']['parameters'].get_dict()
-                struct = wc.inputs['pw']['structure']
-                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
-                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
-                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
-        else: self.ctx.previous_trajectory = None
+                self.report('Calcfunction associated with previous trajectory not found.')
+        if wc:
+            struct = wc.inputs['pw']['structure']
+            if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -465,123 +451,28 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         In the pinball, the `parent_folder` is never changed, and the `restart_mode` is not set.
 
-        If a `restart_calc` has been set in the context, the structure & velocities will be read from its output
-        trajectory.
+        If a `restart_calc` has been set in the context, the structure & velocities will be read from its output trajectory.
         """
-        # NOTE pinball: the parent folder (charge density) does not change, we do not need to specify the restart mode
-        if self.ctx.restart_calc:
-            # if it is a replay, extract structure and velocities from trajectory of restart_calc
-            # NOTE (TODO): if we are retrying a calculation identical to the prev one (e.g. after an unhandled failure),
-            #              there is no need to extract the structure & velocities again
-            try:
-                prev_trajectory = self.ctx.restart_calc.outputs.output_trajectory
-            except (KeyError, exceptions.NotExistent):
-                raise RuntimeError('Previous trajectory not found!')
-            self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
-            kwargs = {'trajectory': prev_trajectory,
-                      'parameters': get_or_create_input_node(orm.Dict,
-                          dict(step_index=-1,
-                               recenter=False,
-                               create_settings=True,
-                               complete_missing=True),
-                          store=True),
-                      'structure': self.ctx.inputs.structure,
-                      'metadata': {'call_link_label': 'get_structure'}}
-            if self.ctx.inputs.settings:
-                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
-
-            res = get_structure_from_trajectory(**kwargs)
-
-            self.ctx.inputs.structure = res['structure']
-            self.ctx.inputs.settings = res['settings'].get_dict()
-            #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'restart'  ## NOT NEEDED IN PINBALL
-        elif self.ctx.previous_trajectory:
-            self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
-            kwargs = {'trajectory': self.ctx.previous_trajectory,
-                      'parameters': get_or_create_input_node(orm.Dict,
-                          dict(step_index=-1,
-                               recenter=False,
-                               create_settings=True,
-                               complete_missing=True),
-                          store=True),
-                      'structure': self.ctx.inputs.structure,
-                      'metadata': {'call_link_label': 'get_structure'}}
-            if self.ctx.inputs.settings:
-                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
-
-            res = get_structure_from_trajectory(**kwargs)
-
-            self.ctx.inputs.structure = res['structure']
-            self.ctx.inputs.settings = res['settings'].get_dict()
-
-            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
-            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
-            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
-        
-        else:
-            # start from scratch, eventually use `initial_velocities` if defined in input settings
-            # (these were already added to `self.ctx.inputs.settings` by `validate_parameters`)
-            if self.ctx.has_initial_velocities:
-                self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
-            #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'from_scratch'  ## NOT NEEDED IN PINBALL
-            #self.ctx.inputs.pop('parent_folder', None)
-
         self.ctx.inputs.parameters['CONTROL']['nstep'] = self.ctx.mdsteps_todo
-        self.ctx.inputs.metadata['label'] = f'flipper_{self.ctx.iteration:02d}'
+        self.ctx.inputs.metadata['label'] = f'hustler_{self.ctx.iteration:02d}'
         self.ctx.has_initial_velocities = False
 
-        ## if this is not flipper MD
-        #if not input_dict['CONTROL'].get('lflipper', False):
-        #    input_dict['IONS']['wfc_extrapolation'] = 'second_order'
-        #    input_dict['IONS']['pot_extrapolation'] = 'second_order'
-
-        ## HUSTLER STUFF (not implemented)
-        if self.inputs.get('is_hustler', False):
-            raise NotImplementedError('Hustler not implemented.')
-        #   hustler_positions = self.inputs.hustler_positions
-        #   if self.ctx.steps_done:
-        #       #~ self.ctx.array_splitting_indices.append(self.ctx.steps_done)
-        #       inlinec, res = split_hustler_array_inline(
-        #           array=hustler_positions, parameters=get_or_create_parameters(dict(index=self.ctx.steps_done))
-        #       )
-        #       return_d['split_hustler_array_{}'.format(
-        #           str(self.ctx.iteration).rjust(len(str(self._MAX_ITERATIONS)), str(0))
-        #       )] = inlinec
-        #       calc.use_array(res['split_array'])
-        #   else:
-        #       calc.use_array(hustler_positions)
-
-#    def run_process(self):
-#        """Run the next process, taking the input dictionary from the context at `self.ctx.inputs`."""
-
-#    def inspect_process(self):
-#        """Analyse the results of the previous process and call the handlers when necessary. [...]"""
-#        super().inspect_process()
-
-    def check_energy_fluctuations(self):
-        """Check the fluctuations of the total energy of the total trajectory so far.
-        If they are higher of the threshold, abort.
-        """
-        total_energy_max_fluctuation = self.inputs.get('total_energy_max_fluctuation', None)
-        if total_energy_max_fluctuation:
-            calculation = self.ctx.children[self.ctx.iteration - 1]
-            try:
-                traj = calculation.outputs.output_trajectory
-            except exceptions.NotExistent:
-                self.report('{}><{}> [check_energy_fluctuations]: Trajectory not found. Skipping test.'.format(
-                            calculation.process_label, calculation.pk))
+        hustler_snapshots = self.inputs.get('hustler_snapshots')
+        arraynames = hustler_snapshots.get_arraynames()
+        traj = orm.TrajectoryData()
+        for arrname in arraynames:
+            if arrname in ('symbols', 'atomic_species_name'):
+                traj.set_array(arrname, hustler_snapshots.get_array(arrname))
             else:
-                traj = get_total_trajectory(self, store=False)
-                total_energies = traj.get_array('total_energies')
-                diff = total_energies.max() - total_energies.min()
-                if (diff > total_energy_max_fluctuation):
-                    self.report(
-                        '{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} EXCEEDED THRESHOLD {} !!'
-                        '  Aborting...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
-                    return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
-                else:
-                    self.report('{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} < threshold ({}) OK'.format(
-                                    calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
+                to_skip, = hustler_snapshots.get_shape('steps')
+                tmp_array = hustler_snapshots.get_array(arrname)[::int(to_skip/self.ctx.nsteps)]
+                # to skip the positions calculated before
+                traj.set_array(arrname, tmp_array[self.ctx.mdsteps_todo+1:])
+        [traj.set_attribute(k, v) for k, v in hustler_snapshots.attributes_items() if not k.startswith('array|')]
+        if 'timestep_in_fs' in hustler_snapshots.attributes:
+            traj.set_attribute('sim_time_fs', traj.get_array('steps').size * hustler_snapshots.get_attribute('timestep_in_fs'))
+
+        self.ctx.inputs['hustler_snapshots'] = traj
 
     def update_mdsteps(self):
         """Get the number of steps of the last trajectory and update the counters. If there are more MD steps to do,
@@ -626,10 +517,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
     def results(self):  # pylint: disable=inconsistent-return-statements
         """Concatenate the trajectories and attach the outputs."""
         # get the concatenated trajectory, even if the max number of iterations have been reached
-        if self.ctx.previous_trajectory:
-            traj = get_total_trajectory(self, self.ctx.previous_trajectory, store=True)
-        else:
-            traj = get_total_trajectory(self, store=True)
+        traj = get_total_trajectory(self, store=True)
         if traj:
             self.out('total_trajectory', traj)
         else:
@@ -699,29 +587,3 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.restart_calc = calculation
             self.report_error_handled(calculation, 'Restarting calculation...')
             return ProcessHandlerReport(True)
-
-#    @process_handler(priority=600)
-#    def handle_unrecoverable_failure(self, calculation):
-#        """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
-#        if calculation.is_failed and calculation.exit_status < 400:
-#            self.report_error_handled(calculation, 'unrecoverable error, aborting...')
-#            return ProcessHandlerReport(True, self.exit_codes.ERROR_UNRECOVERABLE_FAILURE)
-
-#    @process_handler(priority=590, exit_codes=[
-#        PwCalculation.exit_codes.ERROR_COMPUTING_CHOLESKY,
-#    ])
-#    def handle_known_unrecoverable_failure(self, calculation):
-#        """Handle calculations with an exit status that correspond to a known failure mode that are unrecoverable.
-#
-#        These failures may always be unrecoverable or at some point a handler may be devised.
-#        """
-#        self.report_error_handled(calculation, 'known unrecoverable failure detected, aborting...')
-#        return ProcessHandlerReport(True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE)
-
-    ### EXIT CODES >= 400 THAT HAVE NOT BEEN HANDLED YET
-#    @process_handler(priority=410, exit_codes=[
-#        FlipperCalculation.exit_codes.ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED,])
-#    def handle_electronic_convergence_not_achieved(self, calculation):
-#        """Handle `ERROR_ELECTRONIC_CONVERGENCE_NOT_REACHED`: decrease the mixing beta and restart from scratch."""
-
-    ## add possible flipper-specific error handlers

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Workchain to call MD workchains using Quantum ESPRESSO pw.x."""
+"""Workchain to call MD workchains using Pinball pw.x. based on Quantum ESPRESSO"""
 from aiida.engine.processes import workchains
 from samos.trajectory import Trajectory
 from aiida import orm
@@ -38,29 +38,12 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
         # spec.input('code', valid_type=orm.Code, help='The code used to run the calculations.')
-        spec.input('max_md_convergence_iterations', valid_type=orm.Int,
+        spec.input('max_md_iterations', valid_type=orm.Int,
             help='The maximum number of MD runs that will be called by this workchain.')
-        spec.input('min_md_convergence_iterations', valid_type=orm.Int,
-            help='The minimum number of MD runs that will be called by this workchain even if diffusion coefficient has converged.')
+        spec.input('min_md_iterations', valid_type=orm.Int,
+            help='The minimum number of MD runs that will be called by this workchain even if diffusion coefficient has converged')
         spec.input('diffusion_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the threshold values for diffusion convergence.')
-        # spec.inputs['diffusion_parameters'].default = lambda: orm.Dict(dict={
-        #     'sem_threshold': 1.e-5,
-        #     'sem_relative_threshold': 1.e-2})
         spec.input('msd_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the parameters required for MSD computation by Samos.')
-        # spec.inputs['msd_parameters'].default = lambda: orm.Dict(dict={
-        #     'equilibration_time_fs': 5.e6,
-        #     'species_of_interest': 'Li',
-        #     'stepsize_t' : 1,
-        #     'stepsize_tau' : 1,
-        #     'nr_of_blocks' : 1,
-        #     't_start_dt' : 0,
-        #     't_end_dt' : 1.e4,
-        #     't_start_fit_dt' : 1.e5,
-        #     't_end_fit_dt' : 3.e5,
-        #     't_long_factor' : 1,
-        #     'do_com' : False,
-        #     'decomposed' : False,
-        #     'verbosity' : 0})
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
         spec.outline(
@@ -79,6 +62,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             message='Either the stashed charge densities or the flipper compatible supercell structure not found.')
         spec.exit_code(704, 'ERROR_SUB_PROCESS_FAILED_MD',
             message='The ReplayMDWorkChain sub process failed.')
+        spec.exit_code(705, 'ERROR_TRAJECTORY_NOT_FOUND',
+            message='The output trajectory of ReplayMDWorkChain not found.')
         # spec.expose_outputs(ReplayMDWorkChain)
         spec.output('total_trajectory', valid_type=orm.TrajectoryData,
             help='The full concatenated trajectory of all called ReplayMDWorkChains.')
@@ -104,7 +89,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.replay_inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, namespace='md'))
         self.ctx.replay_inputs.pw.parameters = self.ctx.replay_inputs.pw.parameters.get_dict()
         self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
-        # self.ctx.replay_inputs.pw['parent_folder'] = self.inputs.parent_folder
         self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
         self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
    
@@ -135,13 +119,12 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         qb = orm.QueryBuilder()
         qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
         qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        try:
-            qb.append(orm.RemoteData, with_incoming='prepro')
-            stashed_folder = qb.all(flat=True)[-1]
-            qb.append(orm.StructureData, with_incoming='prepro')
-            current_structure = qb.all(flat=True)[-1]
-        except exceptions.NotExistent:
-            raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+        qb.append(orm.RemoteData, with_incoming='prepro')
+        if qb.count(): stashed_folder = qb.all(flat=True)[-1]
+        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+        qb.append(orm.StructureData, with_incoming='prepro')
+        if qb.count(): current_structure = qb.all(flat=True)[-1]
+        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
 
         args = (code, structure, stashed_folder, protocol)
         replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
@@ -156,8 +139,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         builder.structure = structure
         builder.parent_folder = stashed_folder
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
-        builder.max_md_convergence_iterations = orm.Int(inputs['max_md_convergence_iterations'])
-        builder.min_md_convergence_iterations = orm.Int(inputs['min_md_convergence_iterations'])
+        builder.max_md_iterations = orm.Int(inputs['max_md_iterations'])
+        builder.min_md_iterations = orm.Int(inputs['min_md_iterations'])
         builder.diffusion_parameters = orm.Dict(dict=inputs['diffusion_parameters'])
         builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
 
@@ -168,8 +151,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
         """
-        if (self.inputs.min_md_convergence_iterations.value >= self.ctx.replay_counter): return True
-        elif (not(self.ctx.converged) or (self.inputs.max_md_convergence_iterations.value <= self.ctx.replay_counter)): return True
+        if (self.inputs.min_md_iterations.value >= self.ctx.replay_counter): return True
+        elif (not(self.ctx.converged) or (self.inputs.max_md_iterations.value <= self.ctx.replay_counter)): return True
         else: return False
 
     def run_process(self):
@@ -185,6 +168,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         else:
             # for every run after the first one, the velocities and positions (which make the new structure) are read from the trajectory of previous MD run
             # if trajectory and structure have different shapes (i.e. for pinball level 1 calculation only pinball positions are printed:)
+
+            # This input can only be used by the first MD run that I call.
+            try: inputs.pop('previous_trajectory', None)
+            except Exception: pass
+
             workchain = self.ctx.workchains[-1]
             create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
@@ -203,7 +191,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             inputs.pw['structure'] = res['structure']
             self.ctx.current_structure = res['structure']
             inputs.pw['parameters']['IONS'].update({'ion_velocities': 'from_input'})
-            inputs.pw['settings'].set_dict(res['settings'])
+            inputs.pw['settings'] = res['settings'].get_dict()
         
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = f'replay_{self.ctx.replay_counter:02d}'
@@ -237,21 +225,27 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         try:
             trajectory = workchain.outputs.total_trajectory
-        except exceptions.NotExistent:
+        except Exception:
             self.report('the Md run with ReplayMDWorkChain finished successfully but without output trajectory')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
+            return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
 
         # Calculate MSD and check if it converged
         pk_list = []
-        for calc in workchains: pk_list.append(calc.pk)
-        concat_input_d = get_trajectories_dict(pk_list)
-        concat_input_d.update({'remove_repeated_last_step': True})
-        concatenated_trajectory = concatenate_trajectory(**concat_input_d)['concatenated_trajectory']
+        for calc in self.ctx.workchains: pk_list.append(calc.pk)
 
+        if len(pk_list) > 1:
+            concat_input_d = get_trajectories_dict(pk_list)
+            concat_input_d.update({'remove_repeated_last_step': True})
+            concatenated_trajectory = concatenate_trajectory(**concat_input_d)['concatenated_trajectory']
+        elif len(pk_list) == 1:
+            concatenated_trajectory = trajectory
+        else:
+            return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
+        
         msd_results = get_diffusion_from_msd(
                 structure=self.ctx.current_structure,
                 parameters=get_or_create_input_node(orm.Dict, self.ctx.msd_parameters_d, store=False),
-                trajectory=concatenated_trajectory)
+                trajectory=concatenated_trajectory)['msd_results']
         sem = msd_results.attributes['{}'.format(self.ctx.msd_parameters_d['species_of_interest'][0])]['diffusion_sem_cm2_s']
         mean_d = msd_results.attributes['{}'.format(self.ctx.msd_parameters_d['species_of_interest'][0])]['diffusion_mean_cm2_s']
         sem_relative = sem / mean_d
@@ -286,7 +280,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     def results(self):
         """Attach the output parameters and combined trajectories of all called ReplayMDWorkChains to the outputs."""
-        if self.ctx.converged and self.ctx.replay_counter <= self.ctx.max_md_convergence_iterations:
+        if self.ctx.converged and self.ctx.replay_counter <= self.inputs.max_md_iterations.value:
             self.report(f'workchain completed after {self.ctx.replay_counter} iterations')
         else:
             self.report('maximum number of MD convergence iterations exceeded')

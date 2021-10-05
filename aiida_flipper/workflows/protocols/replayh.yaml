@@ -2,8 +2,7 @@ default_inputs:
     clean_workdir: False
     metadata:
         label: ''
-    nstep: 100000
-    total_energy_max_fluctuation: 300 # need to modify this
+    nstep: 25
     meta_parameters:
         conv_thr_per_atom: 0.2e-9
         etot_conv_thr_per_atom: 1.e-5
@@ -21,9 +20,8 @@ default_inputs:
         parameters:
             CONTROL:
                 calculation: md
-                dt: 50 # 2.4 femto seconds
+                lhustle: True
                 lflipper: True
-                iprint: 10
                 ldecompose_forces: True
                 ldecompose_ewald: True
                 flipper_do_nonloc: True
@@ -34,10 +32,6 @@ default_inputs:
             ELECTRONS:
                 electron_maxstep: 80
                 mixing_beta: 0.4
-            IONS:
-                ion_temperature: 'svr'
-                nraise: 100
-                tempw: 1000
 
 default_protocol: moderate
 protocols:
@@ -53,7 +47,6 @@ protocols:
             parameters:
                 CONTROL:
                     forc_conv_thr: 0.5e-4
-                    dt: 10
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
         meta_parameters:
@@ -63,4 +56,3 @@ protocols:
             parameters:
                 CONTROL:
                     forc_conv_thr: 1.e-3
-                    dt: 200
