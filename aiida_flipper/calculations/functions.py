@@ -267,7 +267,7 @@ def update_parameters_with_coefficients(parameters, coefficients):
     return {'updated_parameters': get_or_create_input_node(orm.Dict, parameters_main_d, store=True)}
 
 
-# @calcfunction
+@calcfunction
 def get_pinball_factors(parameters, trajectory_scf, trajectory_pb):
     from aiida_flipper.utils.utils import Force, fit_with_lin_reg, make_fitted, plot_forces
     from scipy.stats import linregress
@@ -297,8 +297,7 @@ def get_pinball_factors(parameters, trajectory_scf, trajectory_pb):
         all_forces_scf = np.delete(all_forces_scf, idx, axis=0)
         all_forces_pb  = np.delete(all_forces_pb,  idx, axis=0)
 
-    if nsample == None:
-        nsample = min((len(all_forces_scf), len(all_forces_pb)))
+    if nsample == None: nsample = min((len(all_forces_scf), len(all_forces_pb)))
 
     forces_scf = Force(all_forces_scf[starting_point:starting_point+nsample*stepsize:stepsize])
     forces_pb = Force(all_forces_pb[starting_point:starting_point+nsample*stepsize:stepsize])
@@ -315,7 +314,7 @@ def get_pinball_factors(parameters, trajectory_scf, trajectory_pb):
             forces_scf.get_signal(0).flatten(), forces_fitted.get_signal(0).flatten())
     slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(
             forces_scf.get_signal(0).flatten(), forces_pb.get_signal(0).flatten())
-    plot_forces([forces_scf, forces_pb, forces_fitted], labels=('DFT', 'pinball', 'pinball-fitted'), format_='0:0,1:0;0:0,2:0', titles=("Before Fit", "After Fit"),savefig=None)
+    # plot_forces([forces_scf, forces_pb, forces_fitted], labels=('DFT', 'pinball', 'pinball-fitted'), format_='0:0,1:0;0:0,2:0', titles=("Before Fit", "After Fit"),savefig=None)
 
     coeff_params = orm.Dict(dict={
         'coefs': coefs.tolist(),

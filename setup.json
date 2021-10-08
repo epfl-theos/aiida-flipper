@@ -34,7 +34,8 @@
             "quantumespresso.flipper.replaymdhustler = aiida_flipper.workflows.replaymdh:ReplayMDHustlerWorkChain",
             "quantumespresso.flipper.lindiffusion = aiida_flipper.workflows.lindiff:LinDiffusionWorkChain",
             "quantumespresso.flipper.convergediffusion = aiida_flipper.workflows.condiff:ConvergeDiffusionWorkChain",
-            "quantumespresso.flipper.preprocess = aiida_flipper.workflows.preprocess:PreProcessWorkChain"
+            "quantumespresso.flipper.preprocess = aiida_flipper.workflows.preprocess:PreProcessWorkChain",
+            "quantumespresso.flipper.fitting = aiida_flipper.workflows.fitting:FittingWorkChain"
         ]
     }
 }

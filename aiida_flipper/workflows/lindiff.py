@@ -38,12 +38,9 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
         # spec.input('code', valid_type=orm.Code, help='The code used to run the calculations.')
-        spec.input('max_md_iterations', valid_type=orm.Int,
-            help='The maximum number of MD runs that will be called by this workchain.')
-        spec.input('min_md_iterations', valid_type=orm.Int,
-            help='The minimum number of MD runs that will be called by this workchain even if diffusion coefficient has converged')
         spec.input('diffusion_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the threshold values for diffusion convergence.')
         spec.input('msd_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing all the parameters required for MSD computation by Samos.')
+        spec.input('coefficients', valid_type=orm.Dict, required=False, help='The dictionary containing the pinball hyperparameters generated after fitting.')
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
         spec.outline(
@@ -91,6 +88,13 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
         self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
         self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
+        # I load the pinball hyper parameters here
+        if self.inputs.coefficients:
+            coefs = self.inputs.coefficients.get_attribute('coefs')
+            self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_local_factor'] = coefs[0]
+            self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
+            self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
+            self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
    
     @classmethod
     def get_protocol_filepath(cls):
@@ -101,7 +105,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, protocol=None, overrides=None, **kwargs
+        cls, code, structure, coefficients=None, protocol=None, overrides=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
@@ -139,10 +143,9 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         builder.structure = structure
         builder.parent_folder = stashed_folder
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
-        builder.max_md_iterations = orm.Int(inputs['max_md_iterations'])
-        builder.min_md_iterations = orm.Int(inputs['min_md_iterations'])
         builder.diffusion_parameters = orm.Dict(dict=inputs['diffusion_parameters'])
         builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
+        if coefficients: builder.coefficients = coefficients
 
         return builder
 
@@ -151,8 +154,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
         """
-        if (self.inputs.min_md_iterations.value >= self.ctx.replay_counter): return True
-        elif (not(self.ctx.converged) or (self.inputs.max_md_iterations.value <= self.ctx.replay_counter)): return True
+        if (self.ctx.diffusion_parameters_d['min_md_iterations'] >= self.ctx.replay_counter): return True
+        elif (not(self.ctx.converged) or (self.ctx.diffusion_parameters_d['max_md_iterations'] <= self.ctx.replay_counter)): return True
         else: return False
 
     def run_process(self):
@@ -215,18 +218,19 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # Maybe add some acceptable failed status in future?
         # acceptable_statuses = ['ERROR_IONIC_CONVERGENCE_REACHED_EXCEPT_IN_FINAL_SCF']
 
-        if workchain.is_excepted or workchain.is_killed:
-            self.report('called ReplayMDWorkChain was excepted or killed')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
-
-        if workchain.is_failed: # and workchain.exit_status not in ReplayMDWorkChain.get_exit_statuses(acceptable_statuses):
-            self.report(f'called ReplayMDWorkChain failed with exit status {workchain.exit_status}')
-            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
-
         try:
             trajectory = workchain.outputs.total_trajectory
         except Exception:
-            self.report('the Md run with ReplayMDWorkChain finished successfully but without output trajectory')
+            self.report('the Md run with ReplayMDWorkChain did not generate output trajectory')
+            
+            if workchain.is_excepted or workchain.is_killed:
+                self.report('called ReplayMDWorkChain was excepted or killed')
+                return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
+            
+            if workchain.is_failed: # and workchain.exit_status not in ReplayMDWorkChain.get_exit_statuses(acceptable_statuses):
+                self.report(f'called ReplayMDWorkChain failed with exit status {workchain.exit_status}')
+                return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
+
             return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
 
         # Calculate MSD and check if it converged
@@ -280,7 +284,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     def results(self):
         """Attach the output parameters and combined trajectories of all called ReplayMDWorkChains to the outputs."""
-        if self.ctx.converged and self.ctx.replay_counter <= self.inputs.max_md_iterations.value:
+        if self.ctx.converged and self.ctx.replay_counter <= self.ctx.diffusion_parameters_d['max_md_iterations']:
             self.report(f'workchain completed after {self.ctx.replay_counter} iterations')
         else:
             self.report('maximum number of MD convergence iterations exceeded')

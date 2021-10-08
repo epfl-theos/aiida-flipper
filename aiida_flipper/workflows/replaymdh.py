@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Workchain to run MD calculations using Pinball pw.x. based on Quantum ESPRESSO"""
+"""Workchain to run hustler level MD calculations using Pinball pw.x. based on Quantum ESPRESSO"""
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
 from aiida.common.links import LinkType
@@ -116,7 +116,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             help='Number of MD steps it will be read from the input parameters otherwise; these many snapshots will be extracted from input trajectory.')
         spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=True,
             help='Trajectory containing the uncorrelated confifurations to be used in hustler calculation.')
-
         spec.outline(
             cls.setup,
             cls.validate_parameters,
@@ -180,7 +179,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         code,
         structure,
         stash_directory,
-        calculation_type,
         hustler_snapshots,
         nstep=None,
         protocol=None,
@@ -197,7 +195,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
         :param stash_directory: the location of charge densities of host lattice
-        :param calculation_type: If I should run a `pinball` or regular QE calculation (`DFT`)
         :param hustler_snapshots: a trajectory file typically the output of a/multiple flipper calculation(s) from which I shall extract `nstep` configurations
         :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces shall be evaluated
         :param protocol: protocol to use, if not specified, the default will be used.
@@ -266,16 +263,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             parameters['SYSTEM']['nspin'] = 2
             parameters['SYSTEM']['starting_magnetization'] = starting_magnetization
 
-        if calculation_type == 'pinball': 
-            pass
-        elif calculation_type == 'DFT':
-            parameters['CONTROL'].pop('lflipper')
-            parameters['CONTROL'].pop('ldecompose_forces')
-            parameters['CONTROL'].pop('ldecompose_ewald')
-            parameters['CONTROL'].pop('flipper_do_nonloc')
-        else: 
-            raise NotImplementedError('Only DFT or pinball type calculations possible.')
-
         # pylint: disable=no-member
         builder = cls.get_builder()
         builder.pw['code'] = code
@@ -298,9 +285,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
 
         builder['pw']['parent_folder'] = stash_directory
         if nstep: builder['nstep'] = nstep
-        else:
-            # get this from missing_Li attribute from the structure
-            builder['nstep'] = orm.Int(inputs['nstep'])
+        else: builder['nstep'] = orm.Int(inputs['nstep'])
 
         # pylint: enable=no-member
         return builder

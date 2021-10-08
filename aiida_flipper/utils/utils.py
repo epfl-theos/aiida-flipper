@@ -164,7 +164,7 @@ def plot_forces(forces, format_=None, nrows=1,
         spec1, spec2 = form.split(',')
         f1_idx_str, form1 = spec1.split(':')
         f2_idx_str, form2 = spec2.split(':')
-        f1_idx, f2_idx = map(int, (f1_idx_str, f2_idx_str))
+        f1_idx, f2_idx = int(f1_idx_str), int(f2_idx_str)
         f1 = forces[f1_idx]
         f2 = forces[f2_idx]
         signal_1 = f1.get_signal(form1)[:minlen]

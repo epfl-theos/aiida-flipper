@@ -1,27 +1,16 @@
 default_inputs:
     clean_workdir: False
-    diffusion_parameters:
-        'max_md_iterations': 10
-        'min_md_iterations': 2
-        'sem_threshold': 1.e-8
-        'sem_relative_threshold': 0.15
-    msd_parameters:
-        'equilibration_time_fs': 2.e+5
-        'species_of_interest': ['Li']
-        'stepsize_t' : 1
-        'stepsize_tau' : 1
-        'block_length_ps' : 50
-        't_start_fs' : 0
-        't_end_fs' : 2.e+5
-        't_start_fit_fs' : 1.e+5
-        't_end_fit_fs' : 2.e+5
-        'do_com' : False
-        'decomposed' : False
-        'verbosity' : 0
+    fitting_parameters:
+        'starting_point': 0
+        'stepsize': 1
+        'nsample': null
+        'signal_indices': null
+        'symbol': 'Li'
+        'divide_r2': False
     metadata:
-        label: 'replay_'
+        label: 'replayh_'
     md:
-        nstep: 1.e+6 # 2.4ns
+        nstep: 25
         pw:
             settings:
                 gamma_only: True
@@ -31,9 +20,8 @@ default_inputs:
                         num_machines: 1
                         num_cores_per_mpiproc: 2
                         num_mpiprocs_per_machine: 64
-                    max_wallclock_seconds: 43200  # 12 hours
+                    max_wallclock_seconds: 14400  # 12 hours
                     withmpi: True
-
 
 default_protocol: moderate
 protocols:
@@ -41,7 +29,9 @@ protocols:
         description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
     precise:
         description: 'Protocol to perform the computation at high precision at higher computational cost.'
-        min_md_convergence_iterations: 5
+        md:
+            nstep: 50
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
-        min_md_convergence_iterations: 1
+        md:
+            nstep: 10

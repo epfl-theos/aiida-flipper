@@ -2,6 +2,7 @@
 """Workchain to generate pinball hyperparameters"""
 from aiida.engine import calcfunction
 from aiida.engine.processes import workchains
+from aiida_quantumespresso.utils.defaults import calculation
 from samos.trajectory import Trajectory
 from aiida import orm
 from aiida.common import AttributeDict, exceptions  
@@ -16,265 +17,211 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDHWorkChain = WorkflowFactory('quantumespresso.flipper.replaymdhustler')
 
-
-class FittingWorkChain(ProtocolMixin, BaseRestartWorkChain):
+class FittingWorkChain(ProtocolMixin, WorkChain):
     """Workchain to run hustler level `pinball` and `DFT` calculations to fit forces and
     generate pinball hyperparameters, using Pinball Quantum ESPRESSO pw.x."""
     _process_class = ReplayMDHWorkChain
 
+    @classmethod
+    def define(cls, spec):
+        """Define the process specification."""
+        super().define(spec)
+        spec.expose_inputs(ReplayMDHWorkChain, namespace='md',
+            exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
+            namespace_options={'help': 'Inputs for the `ReplayMDWorkChain` for MD runs are called in the `md` namespace.'})
+        spec.input('structure', valid_type=orm.StructureData, help='The input unitcell structure and not the supercell.')
+        spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
+            help='The stashed directory containing charge densities of host lattice.')
+        spec.input('fitting_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing the fitting parameters.')
+        spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
+            help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
+        spec.outline(
+            cls.setup,
+            cls.run_process_pb,
+            cls.run_process_dft,
+            cls.inspect_process,
+            cls.results,
+        )
 
-    def positions(self):
-        return self.inp.positions
+        spec.exit_code(702, 'ERROR_FITTING_FAILED',
+            message='The linear regression to fit pinball and dft forces failed.')
+        spec.exit_code(703, 'ERROR_CHARGE_DENSITIES_NOT_FOUND',
+            message='Either the stashed charge densities or the flipper compatible supercell structure not found.')
+        spec.exit_code(704, 'ERROR_SUB_PROCESS_FAILED_MD',
+            message='The ReplayMDHustlerWorkChain sub process failed.')
+        spec.exit_code(705, 'ERROR_TRAJECTORY_NOT_FOUND',
+            message='The output trajectory of ReplayMDWorkChain not found.')
+        # spec.expose_outputs(ReplayMDWorkChain)
+        spec.output('coefficients', valid_type=orm.Dict,
+            help='The dictionary containing the newly fitted pinball hyperparameters(keyword - `coefs`) along with linear regression values.')
+        spec.output('trajectory_pb', valid_type=orm.TrajectoryData,
+            help='The output trajectory of pinball Hustler calculation for easy manual fitting/post-processing if needed.')
+        spec.output('trajectory_dft', valid_type=orm.TrajectoryData,
+            help='The output trajectory of DFT Hustler calculation for easy manual fitting/post-processing if needed.')
 
-    def start(self):
+    def setup(self):
+        """Input validation and context setup."""
+
+        # I store the flipper/pinball compatible structure as current_structure
+        qb = orm.QueryBuilder()
+        qb.append(orm.StructureData, filters={'id':{'==':self.inputs.structure.pk}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        # no need to check if supercell structure exists, already checked by builder
+        qb.append(orm.StructureData, with_incoming='prepro')
+        if qb.count() > 1: self.report('Multiple charge densities found for structure <{}>; using the last one to start MD runs'.format(self.inputs.structure.pk))
+        self.ctx.current_structure = qb.all(flat=True)[-1]
+
+        # I store all the input dictionaries in context variables
+        self.ctx.replay_inputs = AttributeDict(self.exposed_inputs(ReplayMDHWorkChain, namespace='md'))
+        self.ctx.replay_inputs.pw.parameters = self.ctx.replay_inputs.pw.parameters.get_dict()
+        self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
+
+    @classmethod
+    def get_protocol_filepath(cls):
+        """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
+        from importlib_resources import files
+        from aiida_flipper.workflows import protocols as proto
+        return files(proto) / 'fitting.yaml'
+
+    @classmethod
+    def get_builder_from_protocol(
+        cls, code, structure, protocol=None, overrides=None, **kwargs
+    ):
+        """Return a builder prepopulated with inputs selected according to the chosen protocol.
+
+        :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
+        :param structure: the ``StructureData`` instance to use.
+        :param protocol: protocol to use, if not specified, the default will be used.
+        :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
+        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
+            sub processes that are called by this workchain.
+        :return: a process builder instance with all inputs defined ready for launch.
         """
-        Method to start (i.e. how to create the positions) 
-        has to be defined by the subclass
+        from aiida_quantumespresso.common.types import ElectronicType
+        inputs = cls.get_protocol_inputs(protocol, overrides)
+
+        # I query the charge densities and supercell
+        qb = orm.QueryBuilder()
+        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        qb.append(orm.RemoteData, with_incoming='prepro')
+        if qb.count(): stashed_folder = qb.all(flat=True)[-1]
+        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+        qb.append(orm.StructureData, with_incoming='prepro')
+        if qb.count(): current_structure = qb.all(flat=True)[-1]
+        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+        # I query the trajectory from which I extract snapshots for force fitting
+        qb = orm.QueryBuilder()
+        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='struct', tag='lindiff', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]})
+        qb.append(orm.TrajectoryData, with_incoming='lindiff')
+        if qb.count(): out_traj = qb.all(flat=True)[-1]
+        else: raise RuntimeError(f'output trajectories not found for {structure.pk}, please run LinDiffusionWorkChain before force fitting')
+
+        args = (code, structure, stashed_folder, out_traj, protocol)
+        replay = ReplayMDHWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
+
+        replay['pw'].pop('structure', None)
+        replay.pop('clean_workdir', None)
+        replay['pw'].pop('parent_folder', None)
+
+        builder = cls.get_builder()
+        builder.md = replay
+
+        builder.structure = structure
+        builder.parent_folder = stashed_folder
+        builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
+        builder.fitting_parameters = orm.Dict(dict=inputs['fitting_parameters'])
+
+        return builder
+
+    def run_process_pb(self):
+        """Run the `ReplayMDHustlerWorkChain` to launch a `HustlerCalculation`."""
+
+        inputs = self.ctx.replay_inputs
+        inputs.pw['parent_folder'] = self.inputs.parent_folder
+        inputs.pw['structure'] = self.ctx.current_structure
+        inputs.pw['parameters']['CONTROL']['lflipper'] = True
+        inputs.pw['parameters']['CONTROL']['ldecompose_forces'] = True
+        inputs.pw['parameters']['CONTROL']['ldecompose_ewald'] = True
+        inputs.pw['parameters']['CONTROL']['flipper_do_nonloc'] = True
+                    
+        # Set the `CALL` link label
+        self.inputs.metadata.call_link_label = 'replayh_pb'
+        inputs.metadata.label = 'replayh_pb'
+
+        inputs = prepare_process_inputs(ReplayMDHWorkChain, inputs)
+        running = self.submit(ReplayMDHWorkChain, **inputs)
+
+        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}>')
+        
+        return ToContext(workchains=append_(running))
+
+    def run_process_dft(self):
+        """Run the `ReplayMDHustlerWorkChain` to launch a `HustlerCalculation`."""
+
+        inputs = self.ctx.replay_inputs
+        inputs.pw['parent_folder'] = self.inputs.parent_folder
+        inputs.pw['structure'] = self.ctx.current_structure
+        inputs.pw['parameters']['CONTROL'].pop('lflipper')
+        inputs.pw['parameters']['CONTROL'].pop('ldecompose_forces')
+        inputs.pw['parameters']['CONTROL'].pop('ldecompose_ewald')
+        inputs.pw['parameters']['CONTROL'].pop('flipper_do_nonloc')
+
+        # Set the `CALL` link label
+        self.inputs.metadata.call_link_label = 'replayh_dft'
+        inputs.metadata.label = 'replayh_dft'
+
+        inputs = prepare_process_inputs(ReplayMDHWorkChain, inputs)
+        running = self.submit(ReplayMDHWorkChain, **inputs)
+
+        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}>')
+        
+        return ToContext(workchains=append_(running))
+
+    def inspect_process(self):
+        """Inspect the results of the last `ReplayMDHustlerWorkChain`.
+
+        I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
         """
-        self.inp.structure
-        self.inp.remote_folder_flipper
-        # self.inp.electron_parameters
-        self.inp.parameters
-        # self.inp.flipper_code
-        # self.inp.pseudo_Li
-        # an array that I will calculate the forces on!
-        self.ctx.nstep = self.inp.positions.get_array('positions').shape[0]
+        workchain_pb = self.ctx.workchains[0]
+        workchain_dft = self.ctx.workchains[1]
 
-        self.inp.parameters
-        self.goto(self.launch_replays)
+        for workchain in [workchain_pb, workchain_dft]:
+            if workchain.is_excepted or workchain.is_killed:
+                self.report('called ReplayMDHustlerWorkChain was excepted or killed')
+                return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
-    def launch_calculations(self):
-        #~ rattled_positions = self.out.rattled_positions
-        #################################
-        # raise DeprecationWarning()
-        #################################
-        rattled_positions = self.start()['rattled_positions']
-        nstep = self.ctx.nstep
-        remote_folder = self.inp.remote_folder
-        try:
-            chargecalc, = remote_folder.get_inputs(node_type=CalculationFactory('quantumespresso.pw'))
-        except Exception as e:
-            # This must have been a copied remote folder
-            chargecalc = remote_folder.inp.copied_remote_folder.inp.remote_folder.inp.remote_folder
+            if workchain.is_failed: # and workchain.exit_status not in ReplayMDHustlerWorkChain.get_exit_statuses(acceptable_statuses):
+                self.report(f'called ReplayMDHustlerWorkChain failed with exit status {workchain.exit_status}')
+                return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
-        structure = self.inp.structure
-        pseudofamily = self.inp.parameters.dict.pseudofamily
-        pseudos=pseudofamily.get_pseudos(structure=structure)
-        ecutwfc, ecutrho = pseudofamily.get_recommended_cutoffs(structure=structure, unit='Ry')
-
-        flipper_calc = self.inp.flipper_code.new_calc()
-        flipper_calc._set_parent_remotedata(remote_folder)
-        flipper_calc.use_structure(structure)
-    
-        flipper_calc.use_array(rattled_positions)
-        flipper_calc.use_kpoints(chargecalc.inp.kpoints)
-        flipper_calc.use_settings(chargecalc.inp.settings)
-        parameters_input_flipper = chargecalc.inp.parameters.get_dict()
-        for card, key in (
-                ('SYSTEM', 'tot_charge'),
-                ('CONTROL', 'max_seconds'),
-                ('ELECTRONS', 'conv_thr'),
-                ('ELECTRONS', 'electron_maxstep'),
-                ('ELECTRONS', 'mixing_beta'),
-                ('ELECTRONS', 'diagonalization')
-            ):
             try:
-                del parameters_input_flipper[card][key]
-            except KeyError:
-                pass
-        parameters_input_flipper['CONTROL']['lhustle'] = True
-        parameters_input_flipper['CONTROL']['verbosity'] = 'low'
-        parameters_input_flipper['CONTROL']['lflipper'] = True
-        parameters_input_flipper['CONTROL']['calculation'] = 'md'
-        parameters_input_flipper['CONTROL']['ldecompose_ewald'] = True
-        parameters_input_flipper['CONTROL']['nstep'] = nstep
-        parameters_input_flipper['IONS'] = {}
+                trajectory = workchain.outputs.total_trajectory
+            except Exception:
+                self.report('the Md run with ReplayMDHustlerWorkChain finished successfully but without output trajectory')
+                return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
 
-        flipper_calc.use_parameters(get_or_create_input_node(orm.Dict, parameters_input_flipper, store=False))
-        flipper_resources = {'num_machines': chargecalc.get_resources()['num_machines']}
-        if chargecalc.get_resources().get('num_mpiprocs_per_machine', 0):
-            flipper_resources['num_mpiprocs_per_machine'] = chargecalc.get_resources().get('num_mpiprocs_per_machine')
-        flipper_calc.set_resources(flipper_resources)
-        flipper_calc.set_max_wallclock_seconds(self.inp.parameters.dict.flipper_walltime_seconds)
-        flipper_calc._set_attr('is_flipper', True)
-        flipper_calc._set_attr('is_hustler', True)
-        flipper_calc.label = '%s-hustler-flipper'  % structure.label
+        # Start fitting and compute pinball hyperparameters
+        trajectory_pb = workchain_pb.outputs.total_trajectory
+        trajectory_dft = workchain_dft.outputs.total_trajectory
+        nstep = self.ctx.replay_inputs.nstep.value
 
-        if self.inp.parameters.dict.use_same_code:
-            dft_calc = self.inp.flipper_code.new_calc()
-        else:
-            dft_calc = self.inp.dft_code.new_calc()
-
-        dft_calc.use_structure(structure)
-    
-        dft_calc.use_array(rattled_positions)
-        # I can use different kpoints and settings than charge calc, relay from input
-        dft_calc.use_kpoints(self.inp.kpoints)
-        dft_calc.use_settings(self.inp.settings)
-
-        parameters_input_dft = {
-                                    u'CONTROL': {
-                                        u'calculation': 'md',
-                                        u'restart_mode': 'from_scratch',
-                                        u'dt':40,
-                                        u'iprint':1,
-                                        u'verbosity':'low',
-                                        u'ldecompose_forces':True,
-                                        u'lhustle':True,
-                                    },
-                                    u'SYSTEM': {
-                                        u'nosym': True,
-                                    },
-                                    u'IONS':{}
-                                }
-        
-        parameters_input_dft['SYSTEM']['ecutwfc'] = ecutwfc
-        parameters_input_dft['SYSTEM']['ecutrho'] = ecutrho
-        parameters_input_dft['CONTROL']['nstep'] = nstep
-        parameters_input_dft['ELECTRONS'] = self.inp.electron_parameters.get_dict()
-
-        dft_calc.use_parameters(get_or_create_input_node(orm.Dict, parameters_input_dft, store=False))
-        dft_resources = {"num_machines": self.inp.parameters.dict.dft_num_machines}
-        if self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine", 0):
-            dft_resources["num_mpiprocs_per_machine"] = self.inp.parameters.get_attr("dft_num_mpiprocs_per_machine")
-        dft_calc.set_resources(dft_resources)
-        dft_calc.set_max_wallclock_seconds(self.inp.parameters.dict.dft_walltime_seconds)
-        for k,v in pseudos.iteritems():
-            dft_calc.use_pseudo(v, k)
-        # overwriting pseudo for lithium calculation
-
-        pseudos['Li'] = self.inp.li_pseudo
-
-        for k,v in pseudos.iteritems():
-            flipper_calc.use_pseudo(v,k)
-
-        dft_calc._set_attr('is_hustler', True)
-        dft_calc.label = '%s-hustler-dft'  % structure.label
-        self.goto(self.fit)
-        return {'hustler_flipper':flipper_calc, 'hustler_dft':dft_calc}
-
-
-    def launch_replays(self):
-        positions = self.positions
-        own_inputs = self.get_inputs_dict()
-        own_parameters = own_inputs['parameters'].get_dict()
-        # pseudofamily = own_parameters['pseudofamily']
-        # pseudos=get_pseudos(structure=structure,pseudo_family_name=pseudofamily)
-        # building parameters for DFT Replay!
-
-        dft_resources = {'num_machines': own_parameters['dft_num_machines']}
-        if own_parameters.get('dft_num_mpiprocs_per_machine', 0):
-            dft_resources['num_mpiprocs_per_machine'] = own_parameters.get('dft_num_mpiprocs_per_machine')
-        inputs_dft = dict(
-            moldyn_parameters=get_or_create_input_node(orm.Dict, dict(
-                    nstep=self.ctx.nstep,
-                    max_wallclock_seconds=own_parameters['dft_walltime_seconds'],
-                    resources=dft_resources,
-                    is_hustler=True,
-                ), store=True),
-            structure=own_inputs['structure'],
-            hustler_positions=positions,
-            parameters=own_inputs['parameters_dft'],
-        )
-        flipper_resources = {'num_machines': own_parameters['flipper_num_machines']}
-        if own_parameters.get('flipper_num_mpiprocs_per_machine', 0):
-            flipper_resources['num_mpiprocs_per_machine'] = own_parameters.get('flipper_num_mpiprocs_per_machine')
-        inputs_flipper = dict(
-            moldyn_parameters=get_or_create_input_node(orm.Dict, dict(
-                    nstep=self.ctx.nstep,
-                    max_wallclock_seconds=own_parameters['flipper_walltime_seconds'],
-                    resources=flipper_resources,
-                    is_hustler=True,
-                ), store=True),
-            structure=own_inputs['structure'],
-            hustler_positions=positions,
-            parameters=own_inputs['parameters_flipper'],
-            remote_folder=self.inp.remote_folder_flipper,
-        )
-
-        pseudos_dft = {}
-        pseudos_flipper = {}
-
-        for s in own_inputs['structure'].get_site_kindnames():
-            # Logic: If I specified a pseudo specifically for the use in only DFT or only flipper part, I pass
-            # it with _dft or _flipper. That will be taken by default
-            pseudos_dft['pseudo_{}'.format(s)] = own_inputs.get('pseudo_{}_dft'.format(s), None) or own_inputs['pseudo_{}'.format(s)]
-            pseudos_flipper['pseudo_{}'.format(s)] = own_inputs.get('pseudo_{}_flipper'.format(s), None) or own_inputs['pseudo_{}'.format(s)]
-
-        inputs_dft.update(pseudos_dft)
-        inputs_flipper.update(pseudos_flipper)
-
-        if own_parameters['use_same_settings']:
-            inputs_dft['settings'] = own_inputs['settings']
-            inputs_flipper['settings'] = own_inputs['settings']
-        else:
-            inputs_dft['settings'] = own_inputs['settings_dft']
-            inputs_flipper['settings'] = own_inputs['settings_flipper']
-
-        if own_parameters['use_same_kpoints']:
-            inputs_dft['kpoints'] = own_inputs['kpoints']
-            inputs_flipper['kpoints'] = own_inputs['kpoints']
-        else:
-            inputs_dft['kpoints'] = own_inputs['kpoints_dft']
-            inputs_flipper['kpoints'] = own_inputs['kpoints_flipper']
-
-        if own_parameters['use_same_code']:
-            inputs_dft['code'] = own_inputs['code']
-            inputs_flipper['code'] = own_inputs['code']
-        else:
-            inputs_dft['code'] = own_inputs['dft_code']
-            inputs_flipper['code'] = own_inputs['flipper_code']
-
-        self.goto(self.analyze)
-
-        # Launch replays
-        ret = {'hustler_flipper':ReplayMDHWorkChain(**inputs_flipper), 'hustler_dft':ReplayMDHWorkChain(**inputs_dft)}
-        ret['hustler_flipper'].label = own_inputs['structure'].label + '_hustler_flipper'
-        ret['hustler_dft'].label = own_inputs['structure'].label + '_hustler_DFT'
-        return ret
-
-    def analyze(self):
-        # TODO: Implement the analysis of how far the hustler reached! and relaunch if necessary!
-        # TODO: Remove non-converged steps from the analysis.
-        self.goto(self.fit)
-
-    def fit(self):
-        parameters_d = self.inp.parameters.get_dict()
-        nstep = self.ctx.nstep
-        # trajectory_scf = self.out.hustler_dft.out.output_trajectory
-        trajectory_scf = self.out.hustler_dft.out.total_trajectory
-        # trajectory_pb = self.out.hustler_flipper.out.output_trajectory
-        trajectory_pb = self.out.hustler_flipper.out.total_trajectory
-        
-        for traj in (trajectory_scf, trajectory_pb):
+        for traj in (trajectory_pb, trajectory_dft):
             shape = traj.get_positions().shape
             if shape[0] != nstep:
-                #~ raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.output_trajectory.id, shape, nstep))
-                raise Exception("Wrong shape of array returned by {} ({} vs {})".format(traj.inp.total_trajectory.id, shape, nstep))
+                self.report('Wrong shape of array returned by {} ({} vs {})'.format(traj.pk, shape, nstep))
+                self.exit_codes.ERROR_FITTING_FAILED
 
-        # IMPORTANT TODO: Exclude forces where scf failed! The hustler (maybe?) doesn't fail if SCF doesn't converge...
+        coefficients = get_pinball_factors(parameters=self.inputs.fitting_parameters, trajectory_scf=trajectory_dft, trajectory_pb=trajectory_pb)['coefficients']
+        self.ctx.coefficients = coefficients
+        self.ctx.trajectory_pb = trajectory_pb
+        self.ctx.trajectory_dft = trajectory_dft
+        
+        return
 
-        params_d = get_or_create_input_node(orm.Dict, dict(
-            signal_indices = (1,3,4) if parameters_d['is_local'] else (1,2,3,4),
-            symbol=parameters_d['pinball_kind_symbol'],
-            stepsize=1,
-            nsample=nstep-1, # starting at 1!
-            starting_point=0, # The first step is cut within the function!
-            divide_r2=parameters_d['divide_r2']
-            ), store=True)
-        calc, res = get_pinball_factors(
-                parameters=params_d,
-                trajectory_scf=trajectory_scf,
-                trajectory_pb=trajectory_pb)
-        coefficients = res['coefficients']
-        coefficients.label = '{}-PBcoeffs'.format(self.inp.structure.label)
-        try:
-            # Maybe I'm supposed to store the result?
-            g,_ = orm.Group.get_or_create(name=self.inp.parameters.dict.results_group_name)
-            g.add_nodes(coefficients)
-        except Exception as e:
-            pass
-        # TODO: CALL linkv
-        self.goto(self.exit)
-        return {'get_pinball_factors':calc, 'coefficients':coefficients}
-
+    def results(self):
+        """Output the pinball hyperparameter and results of the fit along with the trajectories."""
+        self.out('coefficients', self.ctx.coefficients)
+        self.out('trajectory_pb', self.ctx.trajectory_pb)
+        self.out('trajectory_dft', self.ctx.trajectory_dft)
