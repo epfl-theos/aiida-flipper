@@ -213,8 +213,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
                 self.report('Wrong shape of array returned by {} ({} vs {})'.format(traj.pk, shape, nstep))
                 self.exit_codes.ERROR_FITTING_FAILED
 
-        coefficients = get_pinball_factors(parameters=self.inputs.fitting_parameters, trajectory_scf=trajectory_dft, trajectory_pb=trajectory_pb)['coefficients']
-        self.ctx.coefficients = coefficients
+        self.ctx.coefficients = get_pinball_factors(trajectory_dft, trajectory_pb)['coefficients']
         self.ctx.trajectory_pb = trajectory_pb
         self.ctx.trajectory_dft = trajectory_dft
         
