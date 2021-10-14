@@ -17,6 +17,7 @@ def make_supercell(structure, distance):
     from supercellor import supercell as sc
     pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
     sc_struct = orm.StructureData()
+    sc_struct.set_extra('original_unitcell', structure.uuid)
     sc_struct.set_pymatgen(pym_sc_struct)
     return sc_struct
 
@@ -48,7 +49,8 @@ def delithiate_structure(structure, element_to_remove):
     delithiated_structure.set_attribute('missing_Li', len(pinball_sites))
     pinball_structure.set_cell(structure.cell)
     pinball_structure.set_attribute('pinball_structure', True)
-    pinball_structure.set_attribute('hustler_nat', len(pinball_sites))
+    pinball_structure.set_extra('original_unitcell', structure.extras['original_unitcell'])
+    pinball_structure.set_attribute('original_unitcell', structure.extras['original_unitcell'])
 
     [pinball_structure.append_kind(_) for _ in pinball_kinds]
     [pinball_structure.append_site(_) for _ in pinball_sites]
@@ -106,7 +108,8 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
     def supercell(self):
         # Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
-        sc_struct = make_supercell(self.inputs.structure, self.inputs.distance)
+        if self.inputs.distance == 0: sc_struct = self.inputs.structure
+        else: sc_struct = make_supercell(self.inputs.structure, self.inputs.distance)
         self.ctx.supercell = delithiate_structure(sc_struct, self.inputs.element_to_remove)
 
     def setup(self):
@@ -134,7 +137,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
-        :param distance: the ``distance`` used to make supercells, do NOT change it after calling the builder
+        :param distance: the ``distance`` used to make supercells, if distance is 0 I assume to take it as supercell and do not generate another supercell, do NOT change it after calling the builder
         :param elemet_to_remove: the ``element`` treated as pinball in the model, do NOT change it after calling the builder
         :param stash_directory: the ``path`` where the charge densities of host lattice are stored
         :param protocol: protocol to use, if not specified, the default will be used.
@@ -151,7 +154,8 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         if stash_directory: stash = stash_directory
         else: stash = orm.Str(inputs['stash_directory'])
 
-        sc_struct = make_supercell(structure, distance)
+        if distance == 0: sc_struct = structure
+        else: sc_struct = make_supercell(structure, distance)
         supercell = delithiate_structure(sc_struct, element)
 
         args = (code, structure, protocol)
@@ -220,5 +224,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_SCF_FINISHED_WITH_ERROR
 
     def result(self):
-        self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
+        if self.inputs.distance == 0: 
+            self.out('pinball_supercell', self.inputs.structure)
+        else: self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
         self.out('host_lattice_scf_output', self.ctx.stashed_data)

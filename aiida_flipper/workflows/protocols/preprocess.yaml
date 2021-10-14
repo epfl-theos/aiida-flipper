@@ -16,9 +16,9 @@ default_inputs:
                 options:
                     resources: # For 128 threads in eiger
                         num_machines: 1
-                        num_cores_per_mpiproc: 2
-                        num_mpiprocs_per_machine: 64
-                    max_wallclock_seconds: 1800  # it shouldn't take even this long
+                        num_cores_per_mpiproc: 1
+                        num_mpiprocs_per_machine: 128
+                    max_wallclock_seconds: 900  # it shouldn't take even this long
                     queue_name: 'debug' # short calculations, so better to run on debug node
                     withmpi: True
             parameters:
