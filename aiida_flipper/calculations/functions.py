@@ -88,7 +88,7 @@ def get_diffusion_from_msd(structure, parameters, trajectory):
         raise RuntimeError('Unknown units for positions {}'.format(units_positions))
 
     ####################### COMPUTE MSD ####################
-    species_of_interest = parameters_d.pop('species_of_interest', None)
+    species_of_interest = parameters_d.pop('species_of_interest', 'Li')
 
     positions = pos_conversion * trajectory.get_positions()[equilibration_steps:]
     nat_in_traj = positions.shape[1]
@@ -220,7 +220,7 @@ def get_structure_from_trajectory(trajectory, parameters, structure=None, settin
 
 @calcfunction
 def concatenate_trajectory(**kwargs):
-    remove_repeated_last_step = kwargs.pop('remove_repeated_last_step', True)
+    remove_repeated_last_step = kwargs.pop('remove_repeated_last_step')
     for k, v in kwargs.items():
         if not isinstance(v, orm.TrajectoryData):
             raise Exception('All my inputs have to be instances of TrajectoryData')

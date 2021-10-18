@@ -12,7 +12,7 @@ import numpy as np
 
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_flipper.calculations.functions import update_parameters_with_coefficients, get_pinball_factors
+from aiida_flipper.calculations.functions import get_pinball_factors
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDHWorkChain = WorkflowFactory('quantumespresso.flipper.replaymdhustler')
@@ -29,7 +29,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         spec.expose_inputs(ReplayMDHWorkChain, namespace='md',
             exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
             namespace_options={'help': 'Inputs for the `ReplayMDWorkChain` for MD runs are called in the `md` namespace.'})
-        spec.input('structure', valid_type=orm.StructureData, help='The input unitcell structure and not the supercell.')
+        spec.input('structure', valid_type=orm.StructureData, help='The input supercell structure.')
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
         spec.input('fitting_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing the fitting parameters.')
@@ -43,7 +43,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             cls.results,
         )
 
-        spec.exit_code(702, 'ERROR_FITTING_FAILED',
+        spec.exit_code(706, 'ERROR_FITTING_FAILED',
             message='The linear regression to fit pinball and dft forces failed.')
         spec.exit_code(703, 'ERROR_CHARGE_DENSITIES_NOT_FOUND',
             message='Either the stashed charge densities or the flipper compatible supercell structure not found.')
@@ -63,18 +63,18 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         """Input validation and context setup."""
 
         # I store the flipper/pinball compatible structure as current_structure
-        qb = orm.QueryBuilder()
-        qb.append(orm.StructureData, filters={'id':{'==':self.inputs.structure.pk}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        # no need to check if supercell structure exists, already checked by builder
-        qb.append(orm.StructureData, with_incoming='prepro')
-        if qb.count() > 1: self.report('Multiple charge densities found for structure <{}>; using the last one to start MD runs'.format(self.inputs.structure.pk))
-        self.ctx.current_structure = qb.all(flat=True)[-1]
+        self.ctx.current_structure = self.inputs.structure
 
         # I store all the input dictionaries in context variables
         self.ctx.replay_inputs = AttributeDict(self.exposed_inputs(ReplayMDHWorkChain, namespace='md'))
         self.ctx.replay_inputs.pw.parameters = self.ctx.replay_inputs.pw.parameters.get_dict()
         self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
+        self.ctx.fitting_parameters_d = self.inputs.fitting_parameters.get_dict()
+
+        # Setting up how many configurations are to be extracted from the input trajectory
+        forces_to_fit = self.ctx.fitting_parameters_d['forces_to_fit']
+        pinballs = [s for s in self.ctx.current_structure.sites if s.kind_name == 'Li']
+        self.ctx.hustler_steps = orm.Int(forces_to_fit/(len(pinballs)*3)+1)
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -85,12 +85,13 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, protocol=None, overrides=None, **kwargs
+        cls, code, structure, parent_folder, protocol=None, overrides=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param parent_folder: the location of charge densities of host lattice
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
         :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
@@ -100,25 +101,17 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         from aiida_quantumespresso.common.types import ElectronicType
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        # I query the charge densities and supercell
+        # validating whether the charge density is correct, better I validate here before the workchain is submitted
         qb = orm.QueryBuilder()
-        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
+        # querying the original unitcell
+        qb.append(orm.StructureData, filters={'uuid':{'==':structure.extras['original_unitcell']}}, tag='struct')
         qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        qb.append(orm.RemoteData, with_incoming='prepro')
-        if qb.count(): stashed_folder = qb.all(flat=True)[-1]
-        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
-        qb.append(orm.StructureData, with_incoming='prepro')
-        if qb.count(): current_structure = qb.all(flat=True)[-1]
-        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
-        # I query the trajectory from which I extract snapshots for force fitting
-        qb = orm.QueryBuilder()
-        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='struct', tag='lindiff', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]})
-        qb.append(orm.TrajectoryData, with_incoming='lindiff')
-        if qb.count(): out_traj = qb.all(flat=True)[-1]
-        else: raise RuntimeError(f'output trajectories not found for {structure.pk}, please run LinDiffusionWorkChain before force fitting')
+        qb.append(orm.RemoteData, with_incoming='prepro', project='id')
+        parent_folders = qb.all(flat=True)
+        if not parent_folder.pk in parent_folders:
+            raise RuntimeError(f'the charge densities <{parent_folder.pk}> do not match with structure {structure.pk}')
 
-        args = (code, structure, stashed_folder, out_traj, protocol)
+        args = (code, structure, parent_folder, protocol)
         replay = ReplayMDHWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
@@ -129,7 +122,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         builder.md = replay
 
         builder.structure = structure
-        builder.parent_folder = stashed_folder
+        builder.parent_folder = parent_folder
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.fitting_parameters = orm.Dict(dict=inputs['fitting_parameters'])
 
@@ -139,6 +132,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         """Run the `ReplayMDHustlerWorkChain` to launch a `HustlerCalculation`."""
 
         inputs = self.ctx.replay_inputs
+        inputs.nstep = self.ctx.hustler_steps
         inputs.pw['parent_folder'] = self.inputs.parent_folder
         inputs.pw['structure'] = self.ctx.current_structure
         inputs.pw['parameters']['CONTROL']['lflipper'] = True
@@ -153,7 +147,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         inputs = prepare_process_inputs(ReplayMDHWorkChain, inputs)
         running = self.submit(ReplayMDHWorkChain, **inputs)
 
-        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}>')
+        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}> at pinball level')
         
         return ToContext(workchains=append_(running))
 
@@ -161,6 +155,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         """Run the `ReplayMDHustlerWorkChain` to launch a `HustlerCalculation`."""
 
         inputs = self.ctx.replay_inputs
+        inputs.nstep = self.ctx.hustler_steps
         inputs.pw['parent_folder'] = self.inputs.parent_folder
         inputs.pw['structure'] = self.ctx.current_structure
         inputs.pw['parameters']['CONTROL'].pop('lflipper')
@@ -175,7 +170,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         inputs = prepare_process_inputs(ReplayMDHWorkChain, inputs)
         running = self.submit(ReplayMDHWorkChain, **inputs)
 
-        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}>')
+        self.report(f'launching ReplayMDHustlerWorkChain<{running.pk}> at DFT level')
         
         return ToContext(workchains=append_(running))
 
@@ -189,17 +184,17 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
 
         for workchain in [workchain_pb, workchain_dft]:
             if workchain.is_excepted or workchain.is_killed:
-                self.report('called ReplayMDHustlerWorkChain was excepted or killed')
+                self.report(f'called ReplayMDHustlerWorkChain<{workchain.pk}> was excepted or killed')
                 return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
             if workchain.is_failed: # and workchain.exit_status not in ReplayMDHustlerWorkChain.get_exit_statuses(acceptable_statuses):
-                self.report(f'called ReplayMDHustlerWorkChain failed with exit status {workchain.exit_status}')
+                self.report(f'called ReplayMDHustlerWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}')
                 return self.exit_codes.ERROR_SUB_PROCESS_FAILED_MD
 
             try:
                 trajectory = workchain.outputs.total_trajectory
             except Exception:
-                self.report('the Md run with ReplayMDHustlerWorkChain finished successfully but without output trajectory')
+                self.report(f'the Md run with ReplayMDHustlerWorkChain<{workchain.pk}> finished successfully but without output trajectory')
                 return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
 
         # Start fitting and compute pinball hyperparameters
@@ -209,9 +204,10 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
 
         for traj in (trajectory_pb, trajectory_dft):
             shape = traj.get_positions().shape
+            # I should remove the first step before comparing
             if shape[0] != nstep:
                 self.report('Wrong shape of array returned by {} ({} vs {})'.format(traj.pk, shape, nstep))
-                self.exit_codes.ERROR_FITTING_FAILED
+                # self.exit_codes.ERROR_FITTING_FAILED
 
         self.ctx.coefficients = get_pinball_factors(trajectory_dft, trajectory_pb)['coefficients']
         self.ctx.trajectory_pb = trajectory_pb

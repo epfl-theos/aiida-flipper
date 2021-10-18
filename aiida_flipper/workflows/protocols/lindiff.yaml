@@ -2,11 +2,11 @@ default_inputs:
     clean_workdir: False
     diffusion_parameters:
         'max_md_iterations': 10
-        'min_md_iterations': 2
+        'min_md_iterations': 3
         'sem_threshold': 1.e-8
         'sem_relative_threshold': 0.15
     msd_parameters:
-        'equilibration_time_fs': 2.e+5
+        'equilibration_time_fs': 1.e+5
         'species_of_interest': ['Li']
         'stepsize_t' : 1
         'stepsize_tau' : 1

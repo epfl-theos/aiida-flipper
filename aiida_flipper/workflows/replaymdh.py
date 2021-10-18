@@ -51,6 +51,8 @@ def get_total_trajectory(workchain, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
+        # because positions are read from hustler.pos which is prepared by hustlercalcjob, there are no repeated steps
+        traj_d.update({'remove_repeated_last_step': False})
         res = concatenate_trajectory(**traj_d)
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
@@ -114,8 +116,8 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
 
         spec.input('nstep', valid_type=orm.Int, required=False,
             help='Number of MD steps it will be read from the input parameters otherwise; these many snapshots will be extracted from input trajectory.')
-        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=True,
-            help='Trajectory containing the uncorrelated confifurations to be used in hustler calculation.')
+        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=False,
+            help='Trajectory containing the uncorrelated configurations to be used in hustler calculation.')
         spec.outline(
             cls.setup,
             cls.validate_parameters,
@@ -179,7 +181,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         code,
         structure,
         stash_directory,
-        hustler_snapshots,
+        hustler_snapshots=None,
         nstep=None,
         protocol=None,
         overrides=None,
@@ -273,7 +275,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         if 'parallelization' in inputs['pw']:
             builder.pw['parallelization'] = orm.Dict(dict=inputs['pw']['parallelization'])
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
-        builder['hustler_snapshots'] = hustler_snapshots
+        if hustler_snapshots: builder['hustler_snapshots'] = hustler_snapshots
         if 'settings' in inputs['pw']:
             builder['pw'].settings = orm.Dict(dict=inputs['pw']['settings'])
             if inputs['pw']['settings']['gamma_only']:
@@ -510,5 +512,5 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         else:
             # restart from trajectory
             self.ctx.restart_calc = calculation
-            self.report_error_handled(calculation, 'Restarting calculation...')
+            if calculation.exit_status != 0: self.report_error_handled(calculation, 'Restarting calculation...')
             return ProcessHandlerReport(True)

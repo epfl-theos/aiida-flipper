@@ -1,5 +1,4 @@
 import os
-import six
 import numpy as np
 
 from aiida import orm
@@ -278,7 +277,7 @@ class HustlerCalculation(PwCalculation):
         # and the second-level keys as lowercase
         # (deeper levels are unchanged)
         input_params = _uppercase_dict(parameters.get_dict(), dict_name='parameters')
-        input_params = {k: _lowercase_dict(v, dict_name=k) for k, v in six.iteritems(input_params)}
+        input_params = {k: _lowercase_dict(v, dict_name=k) for k, v in input_params.items()}
 
         # I remove unwanted elements (for the moment, instead, I stop; to change when we setup a reasonable logging)
         for blocked in cls._blocked_keywords:

@@ -59,6 +59,7 @@ def get_total_trajectory(workchain, previous_trajectory=None, store=False):
     # if I have produced several trajectories, I concatenate them here: (no need to sort them)
     if (len(traj_d) > 1):
         traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
+        traj_d.update({'remove_repeated_last_step': True})
         res = concatenate_trajectory(**traj_d)
         return res['concatenated_trajectory']
     elif (len(traj_d) == 1):
@@ -326,7 +327,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         if total_energy_max_fluctuation: 
             builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
         else: 
-            builder['total_energy_max_fluctuation'] = orm.Float(inputs['total_energy_max_fluctuation'])  
+            builder['total_energy_max_fluctuation'] = orm.Float(0.5 * 1.e6 * parameters['CONTROL']['etot_conv_thr'])
         if previous_trajectory: builder['previous_trajectory'] = previous_trajectory
         # pylint: enable=no-member
         return builder
@@ -345,7 +346,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
             raise NotImplementedError('Non-pinball MD is not implemented yet.')
         if self.inputs.get('is_hustler', False):
-            raise NotImplementedError('Hustler not implemented.')
+            raise NotImplementedError('Please run hustler workchain.')
 
         nstep = self.ctx.inputs.parameters['CONTROL'].get('nstep', None)
         inp_nstep = self.inputs.get('nstep')
@@ -521,6 +522,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
             self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
             self.ctx.mdsteps_done += nsteps_of_previous_trajectory
+            self.report(f'launching WorkChain from a previous trajectory <{self.ctx.previous_trajectory.pk}>')
         
         else:
             # start from scratch, eventually use `initial_velocities` if defined in input settings
@@ -541,7 +543,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         ## HUSTLER STUFF (not implemented)
         if self.inputs.get('is_hustler', False):
-            raise NotImplementedError('Hustler not implemented.')
+            raise NotImplementedError('Please run hustler workchain.')
         #   hustler_positions = self.inputs.hustler_positions
         #   if self.ctx.steps_done:
         #       #~ self.ctx.array_splitting_indices.append(self.ctx.steps_done)
@@ -577,7 +579,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             else:
                 traj = get_total_trajectory(self, store=False)
                 total_energies = traj.get_array('total_energies')
-                diff = total_energies.max() - total_energies.min()
+                diff = total_energies.max() - total_energies.min()  
                 if (diff > total_energy_max_fluctuation):
                     self.report(
                         '{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} EXCEEDED THRESHOLD {} !!'
@@ -701,7 +703,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         else:
             # restart from trajectory
             self.ctx.restart_calc = calculation
-            self.report_error_handled(calculation, 'Restarting calculation...')
+            if calculation.exit_status != 0: self.report_error_handled(calculation, 'Restarting calculation...')
             return ProcessHandlerReport(True)
 
 #    @process_handler(priority=600)

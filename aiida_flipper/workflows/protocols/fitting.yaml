@@ -1,12 +1,7 @@
 default_inputs:
     clean_workdir: False
     fitting_parameters:
-        'starting_point': 0
-        'stepsize': 1
-        'nsample': null
-        'signal_indices': null
-        'symbol': 'Li'
-        'divide_r2': False
+        forces_to_fit: 1.e+4
     metadata:
         label: 'replayh_'
     md:
@@ -20,7 +15,7 @@ default_inputs:
                         num_machines: 1
                         num_cores_per_mpiproc: 2
                         num_mpiprocs_per_machine: 64
-                    max_wallclock_seconds: 14400  # 12 hours
+                    max_wallclock_seconds: 14400  # 4 hours
                     withmpi: True
 
 default_protocol: moderate

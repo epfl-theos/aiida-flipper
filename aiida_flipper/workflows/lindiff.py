@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 """Workchain to call MD workchains using Pinball pw.x. based on Quantum ESPRESSO"""
-from aiida.engine.processes import workchains
-from samos.trajectory import Trajectory
 from aiida import orm
-from aiida.common import AttributeDict, exceptions  
-from aiida.engine import BaseRestartWorkChain, WorkChain, ToContext, if_, while_, append_
-from aiida.plugins import CalculationFactory, WorkflowFactory
-
+from aiida.common import AttributeDict
+from aiida.engine import BaseRestartWorkChain, ToContext, if_, while_, append_
+from aiida.plugins import WorkflowFactory
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
+
+from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDWorkChain = WorkflowFactory('quantumespresso.flipper.replaymd')
@@ -34,7 +32,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.expose_inputs(ReplayMDWorkChain, namespace='md',
             exclude=('clean_workdir', 'pw.structure', 'pw.parent_folder'),
             namespace_options={'help': 'Inputs for the `ReplayMDWorkChain` for MD runs are called in the `md` namespace.'})
-        spec.input('structure', valid_type=orm.StructureData, help='The input unitcell structure and not the supercell.')
+        spec.input('structure', valid_type=orm.StructureData, help='The input supercell structure.')
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
         # spec.input('code', valid_type=orm.Code, help='The code used to run the calculations.')
@@ -65,7 +63,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         spec.output('total_trajectory', valid_type=orm.TrajectoryData,
             help='The full concatenated trajectory of all called ReplayMDWorkChains.')
         spec.output('msd_results', valid_type=orm.ArrayData,
-            help='The `output_parameters` output node of the successful calculation.')
+            help='The dictionary containing the results of msd calculations using the samos library.')
 
     def setup(self):
         """Input validation and context setup."""
@@ -74,13 +72,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.replay_counter = 0
 
         # I store the flipper/pinball compatible structure as current_structure
-        qb = orm.QueryBuilder()
-        qb.append(orm.StructureData, filters={'id':{'==':self.inputs.structure.pk}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        # no need to check if supercell structure exists, already checked by builder
-        qb.append(orm.StructureData, with_incoming='prepro')
-        if len(qb.all(flat=True)) > 1: self.report('Multiple charge densities found for structure <{}>; using the last one to start MD runs'.format(self.inputs.structure.pk))
-        self.ctx.current_structure = qb.all(flat=True)[-1]
+        self.ctx.current_structure = self.inputs.structure
 
         # I store all the input dictionaries in context variables
         self.ctx.replay_inputs = AttributeDict(self.exposed_inputs(ReplayMDWorkChain, namespace='md'))
@@ -89,13 +81,15 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
         self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
         # I load the pinball hyper parameters here
-        if self.inputs.coefficients:
+        try:
             coefs = self.inputs.coefficients.get_attribute('coefs')
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_local_factor'] = coefs[0]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
-   
+            self.report(f'launching WorkChain with pinball coefficients defined by <{self.inputs.coefficients.pk}>')
+        except Exception: self.report(f'launching WorkChain without any pinball hyperparameters')
+
     @classmethod
     def get_protocol_filepath(cls):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
@@ -105,12 +99,14 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, coefficients=None, protocol=None, overrides=None, **kwargs
+        cls, code, structure, parent_folder, coefficients=None, protocol=None, overrides=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param parent_folder: the location of charge densities of host lattice
+        :param coefficients: optional dictionary containing pinball hyperparameters, if not provided the pinball parameters are assumed to be 1
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
         :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
@@ -120,17 +116,17 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         from aiida_quantumespresso.common.types import ElectronicType
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
+        # validating whether the charge density is correct, better I validate here before the workchain is submitted
         qb = orm.QueryBuilder()
-        qb.append(orm.StructureData, filters={'id':{'==':structure.pk}}, tag='struct')
+        # querying the original unitcell
+        qb.append(orm.StructureData, filters={'uuid':{'==':structure.extras['original_unitcell']}}, tag='struct')
         qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
-        qb.append(orm.RemoteData, with_incoming='prepro')
-        if qb.count(): stashed_folder = qb.all(flat=True)[-1]
-        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
-        qb.append(orm.StructureData, with_incoming='prepro')
-        if qb.count(): current_structure = qb.all(flat=True)[-1]
-        else: raise RuntimeError(f'charge densities and/or flipper compatible supercell not found for {structure.pk}')
+        qb.append(orm.RemoteData, with_incoming='prepro', project='id')
+        parent_folders = qb.all(flat=True)
+        if not parent_folder.pk in parent_folders: 
+            raise Exception(f'the charge densities <{parent_folder.pk}> do not match with structure <{structure.pk}>')
 
-        args = (code, structure, stashed_folder, protocol)
+        args = (code, structure, parent_folder, protocol)
         replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
@@ -141,7 +137,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         builder.md = replay
 
         builder.structure = structure
-        builder.parent_folder = stashed_folder
+        builder.parent_folder = parent_folder
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.diffusion_parameters = orm.Dict(dict=inputs['diffusion_parameters'])
         builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
@@ -150,12 +146,12 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         return builder
 
     def should_run_process(self):
-        """Return whether a relaxation workchain should be run.
+        """Return whether an MD workchain should be run.
 
         This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
         """
-        if (self.ctx.diffusion_parameters_d['min_md_iterations'] >= self.ctx.replay_counter): return True
-        elif (not(self.ctx.converged) or (self.ctx.diffusion_parameters_d['max_md_iterations'] <= self.ctx.replay_counter)): return True
+        if (self.ctx.diffusion_parameters_d['min_md_iterations'] > self.ctx.replay_counter): return True
+        elif (not(self.ctx.converged) and (self.ctx.diffusion_parameters_d['max_md_iterations'] > self.ctx.replay_counter)): return True
         else: return False
 
     def run_process(self):

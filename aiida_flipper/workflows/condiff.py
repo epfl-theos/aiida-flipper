@@ -1,294 +1,257 @@
 # -*- coding: utf-8 -*-
-
+"""Mother Workchain that calls LinDiffusionWorkChain and FittingWorkChain to run MD simulations using 
+Pinball pw.x. based on Quantum ESPRESSO and fit pinball hyperparameters resepectively"""
+import numpy as np
 from aiida import orm
-import functools
-from aiida.common.links import LinkType
-from aiida.common import AttributeDict, exceptions
-from aiida.engine import ToContext, append_, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
-from aiida.engine.processes.workchains.restart import validate_handler_overrides
-from aiida_flipper.workflows.replaymd import ReplayMDWorkChain
-from aiida_flipper.calculations.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory, update_parameters_with_coefficients
+from aiida.common import AttributeDict
+from aiida.engine import ToContext, append_, if_, while_, WorkChain
+from aiida_quantumespresso.utils.mapping import prepare_process_inputs
+from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
+from aiida.plugins import WorkflowFactory
+
+from aiida_flipper.calculations.functions import get_structure_from_trajectory
 from aiida_flipper.utils.utils import get_or_create_input_node
-from aiida.plugins import CalculationFactory, WorkflowFactory
 
 LinDiffusionWorkChain = WorkflowFactory('quantumespresso.flipper.lindiffusion')
+FittingWorkChain = WorkflowFactory('quantumespresso.flipper.fitting')
 
+class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartWorkChain?
+    """The main Workchain of aiida_flipper that calls all other workchains to 
+    run following two workchains in a self-consistent-loop
+    run MD calculations untill estimated diffusion coefficient converges,
+    run a fitting workflow to find pinball hyperparameters for next MD runs
+    using Pinball Quantum ESPRESSO pw.x."""
+    # _process_class = LinDiffusionWorkChain
 
-def get_trajectories_dict(calc_list):
-    """
-    Returns a dictionary of the output trajectories with the calling ReplayMDWorkChain's label as the key.
-    """
-    qb = orm.QueryBuilder()
-    qb.append(ReplayMDWorkChain, filters={'id':{'in':calc_list}}, tag='replay', project='label')
-    qb.append(orm.TrajectoryData, with_incoming='replay', project='*', tag='traj')
-    return {'{}'.format(item['replay']['label']):item['traj']['*'] for item in qb.iterdict()}
+    @classmethod
+    def define(cls, spec):
+        """Define the process specification."""
+        super().define(spec)
+        spec.expose_inputs(LinDiffusionWorkChain, namespace='ld',
+            exclude=('clean_workdir', 'structure', 'parent_folder'),
+            namespace_options={'help': 'Inputs for the `LinDiffusionWorkChain` for estimating diffusion coefficient with MD runs are called in the `ld` namespace.'})
+        spec.expose_inputs(FittingWorkChain, namespace='ft',
+            exclude=('clean_workdir', 'structure', 'parent_folder'),
+            namespace_options={'help': 'Inputs for the `FittingWorkChain` for fitting calculations that are called in the `ft` namespace.'})
+        spec.input('structure', valid_type=orm.StructureData, help='The input supercell structure.')
+        spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
+            help='The stashed directory containing charge densities of host lattice.')
+        spec.input('diffusion_convergence_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing the parameters used to converge diffusion coefficient.')
+        spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
+            help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
+        spec.outline(
+            cls.setup,
+            while_(cls.should_run_process)(
+            cls.run_lindiff,
+            cls.run_fit,
+            cls.inspect_process,
+            ),
+            cls.results,
+        )
 
-class ConvergeDiffusionWorkChain(BaseRestartWorkChain):
-    _diff_name = 'diff'
-    _fit_name = 'fit'
-
-    def _get_last_calcs(self, link_name, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
-        """
-        Get the N last diffusion calculations, where N is given by the integer nr_of_calcs:
-        """
-        if diffusion_convergence_parameters_d is None:
-            diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
-        current_counter = self.ctx.diff_counter
-        if nr_of_calcs is None:
-            start = 1
-        else:
-            start = current_counter - nr_of_calcs + 1
-            if start < 1:
-                raise ValueError('You asked for more calculations than there are')
-        res = []
-        for idx in range(start, current_counter + 1):
-            res.append(getattr(self.out, '{}_{}'.format(link_name, str(idx).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))))
-        return res
-
-    def _get_last_diffs(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
-        return self._get_last_calcs(self._diff_name, nr_of_calcs=nr_of_calcs,
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
-
-    def _get_last_fits(self, nr_of_calcs=None, diffusion_convergence_parameters_d=None):
-        return self._get_last_calcs(self._fit_name, nr_of_calcs=nr_of_calcs,
-            diffusion_convergence_parameters_d=diffusion_convergence_parameters_d)
-
-    def start(self):
-        # Now, I start by checking that I have all the parameters I need
-        # Don't need to check to much because the BranchingCalculations will validate
-        # most of the parameters!
-        inp_d = self.get_inputs_dict()
-        for k, v in inp_d.items():
-            # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, orm.CalculationNode):
-                inp_d.pop(k)
-
-        structure = inp_d.pop('structure')
-        for kind in structure.kinds:
-            inp_d.pop('pseudo_{}'.format(kind.name))
-            inp_d.pop('pseudo_{}_flipper'.format(kind.name), None)
-
-        # The code label has to be set as an attribute, and can be changed during the dynamics, but not really required
-        # Code.get_from_string(self.ctx.code_string)
-        self.ctx.num_machines
-        self.ctx.walltime_seconds
-
-        for required_kw in ('moldyn_parameters_main', 'parameters_main', 'msd_parameters', 'diffusion_parameters', 'parameters_fitting',
-            'parameters_fitting_dft', 'parameters_fitting_flipper', 'structure_fitting_parameters', 'hustler_code', 'kpoints'):
-            if required_kw not in inp_d:
-                raise KeyError('Input requires value with keyword {}'.format(required_kw))
-            inp_d.pop(required_kw)
-
-        for optional_kw in ('remote_folder', 'settings'): ## these are not supported yet
-            inp_d.pop(optional_kw, None)
-
-        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
-        try:
-            maxiter = diffusion_convergence_parameters_d['max_iterations']
-            if not isinstance(maxiter, int):
-                raise TypeError('max_iterations needs to be an integer')
-            if maxiter < 1:
-                raise ValueError('max_iterations needs to be a positive integer')
-        except KeyError:
-            raise KeyError('Keyword max_iterations not included in diffusion parameters')
-        try:
-            miniter = diffusion_convergence_parameters_d['min_iterations']
-            if not isinstance(miniter, int):
-                raise TypeError('min_iterations needs to be an integer')
-            if miniter < 3:
-                raise ValueError('min_iterations needs to be larger than 2')
-            if miniter > maxiter:
-                raise ValueError('max_iterations has to be larger or equal to min_iterations')
-        except KeyError:
-            raise KeyError('Keyword min_iterations not included in diffusion convergence parameters')
-
-        for key, typ in (('species', str),):
-            if key not in diffusion_convergence_parameters_d:
-                raise KeyError('Key {} has to be in diffusion convergence parameters')
-            if not isinstance(diffusion_convergence_parameters_d[key], typ):
-                raise TypeError('Key {} has the wrong type ({} {}) as value'.format(key, diffusion_convergence_parameters_d[key], type(diffusion_convergence_parameters_d[key])))
-
-        if inp_d:
-            raise Exception('More keywords provided than needed: {}'.format(list(inp_d.keys())))
-
-        # The replay Counter counts how many REPLAYS I launched
-        self.ctx.diff_counter = 0
-        self.ctx.converged = False
-        self.goto(self.run_estimates)
-        # check if we should start by performing a fit over an old trajectory
-        try:
-            first_fit_trajectory = self.inputs.first_fit_trajectory
-        except AttributeError:
-            first_fit_trajectory = None
-        if first_fit_trajectory:
-            self.goto(self.run_fit)
-        else:
-            self.goto(self.run_estimates)
+        spec.exit_code(707, 'ERROR_FITTING_FAILED',
+            message='The linear regression to fit pinball and dft forces failed.')
+        spec.exit_code(703, 'ERROR_CHARGE_DENSITIES_NOT_FOUND',
+            message='Either the stashed charge densities or the flipper compatible supercell structure not found.')
+        spec.exit_code(708, 'ERROR_LINDIFFUSION_FAILED',
+            message='The LinDiffusionWorkChain sub process failed.')
+        spec.exit_code(704, 'ERROR_TRAJECTORY_NOT_FOUND',
+            message='The output trajectory of ReplayMDWorkChain not found.')
+        # spec.expose_outputs(ReplayMDWorkChain)
+        spec.output('msd_results', valid_type=orm.ArrayData,
+            help='The dictionary containing the results of msd calculations using the samos library of the last LinDiffusionWorkChain')
+        spec.output('total_trajectory', valid_type=orm.TrajectoryData,
+            help='The full concatenated trajectory of the last LinDiffusinWorkChains.')
+        spec.output('coefficients', valid_type=orm.Dict,
+            help='The dictionary containing the final pinball hyperparameters(keyword - `coefs`) along with linear regression values.')
         
-    def run_preprocess(self):
-        """
-        Runs the PreProcessStructureWorkChain to stash the charge densities of host lattice.
-        This is the first workchain that this class must run if charge densities are not found
-        """
-        returndict = {}
-        return returndict
+    def setup(self):
+        """Input validation and context setup."""
 
-    def run_estimates(self):
+        self.ctx.diffusion_counter = 0
+        self.ctx.converged = False
+        self.ctx.current_structure = self.inputs.structure
+
+        # I store input dictionaries in context variables
+        self.ctx.diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
+
+        self.ctx.lindiff_inputs = AttributeDict(self.exposed_inputs(LinDiffusionWorkChain, namespace='ld'))
+        self.ctx.fitting_inputs = AttributeDict(self.exposed_inputs(FittingWorkChain, namespace='ft'))
+        self.ctx.lindiff_inputs.md.pw.settings = self.ctx.lindiff_inputs.md.pw.settings.get_dict()
+
+    @classmethod
+    def get_protocol_filepath(cls):
+        """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
+        from importlib_resources import files
+        from aiida_flipper.workflows import protocols as proto
+        return files(proto) / 'condiff.yaml'
+
+    @classmethod
+    def get_builder_from_protocol(
+        cls, code, structure, parent_folder, protocol=None, overrides=None, **kwargs
+    ):
+        """Return a builder prepopulated with inputs selected according to the chosen protocol.
+
+        :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
+        :param structure: the ``StructureData`` instance to use.
+        :param protocol: protocol to use, if not specified, the default will be used.
+        :param overrides: optional dictionary of inputs to override the defaults of the protocol, usually takes the pseudo potential family.
+        :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
+            sub processes that are called by this workchain.
+        :return: a process builder instance with all inputs defined ready for launch.
+        """
+        inputs = cls.get_protocol_inputs(protocol, overrides)
+
+        args = (code, structure, parent_folder, protocol)
+        lindiff = LinDiffusionWorkChain.get_builder_from_protocol(*args, overrides=inputs['ld'], **kwargs)
+
+        lindiff.pop('structure', None)
+        lindiff.pop('clean_workdir', None)
+        lindiff.pop('parent_folder', None)
+
+        args = (code, structure, parent_folder, protocol)
+        fitting = FittingWorkChain.get_builder_from_protocol(*args, overrides=inputs['ft'], **kwargs)
+
+        fitting.pop('structure', None)
+        fitting.pop('clean_workdir', None)
+        fitting.pop('parent_folder', None)
+
+        builder = cls.get_builder()
+        builder.ld = lindiff
+        builder.ft = fitting
+
+        builder.structure = structure
+        builder.parent_folder = parent_folder
+        builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
+        builder.diffusion_convergence_parameters = orm.Dict(dict=inputs['diffusion_convergence_parameters'])
+
+        return builder
+
+    def should_run_process(self):
+        """Return whether a lindiffusion and fitting workchains should be run.
+
+        This is the case as long as the last process has not finished successfully, and the number of maximum replays has not been reached or diffusion coefficient converged or minimum number of replays has not been reached.
+        """
+        if (self.ctx.diffusion_convergence_parameters_d['min_ld_iterations'] > self.ctx.diffusion_counter): return True
+        elif (not(self.ctx.converged) and (self.ctx.diffusion_convergence_parameters_d['max_ld_iterations'] > self.ctx.diffusion_counter)): return True
+        else: return False
+
+    def run_lindiff(self):
         """
         Runs a LinDiffusionWorkChain for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
-        inp_d = self.get_inputs_dict()
-        for k, v in inp_d.items():
-            # This is a top level workflow, but if it is was called by another, I remove the calls:
-            if isinstance(v, orm.CalculationNode):
-                inp_d.pop(k)
-        diffusion_convergence_parameters_d = inp_d.pop('diffusion_convergence_parameters').get_dict()
+        inputs = self.ctx.lindiff_inputs
+        inputs['parent_folder'] = self.inputs.parent_folder
 
-        # the dictionary for the inputs to the diffusion workflow, first UPF:
-        lindiff_inp = {k: v for k, v in inp_d.items() if isinstance(v, orm.UpfData)}
-        lindiff_inp['pseudo_Li'] = lindiff_inp.pop('pseudo_Li_flipper')
+        if (self.ctx.diffusion_counter == 0):
+            # if this is first run, then I launch an unmodified LinDiffusionWorkChain
+            inputs['structure'] = self.ctx.current_structure
 
-        # now all the required keywords that have same name as for self:
-        for required_kw in ('structure', 'kpoints', 'moldyn_parameters_main', 'diffusion_parameters', 'msd_parameters'):
-            lindiff_inp[required_kw] = inp_d[required_kw]
-        for optional_kw in ('settings', 'remote_folder'):
-            if optional_kw in inp_d:
-                lindiff_inp[optional_kw] = inp_d[optional_kw]
-
-        returndict = {}
-        if self.ctx.diff_counter:
-            coefs = self._get_last_fits(
-                nr_of_calcs=1, diffusion_convergence_parameters_d=diffusion_convergence_parameters_d
-            )[0].out.coefficients
-            c, res = update_parameters_with_coefficients(parameters=inp_d['parameters_main'], coefficients=coefs)
-            returndict['update_parameters_{}'.format(
-                str(self.ctx.diff_counter
-                   ).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
-            )] = c
-            lindiff_inp['parameters_main'] = res['updated_parameters']
         else:
-            # In case there was no fitting done. I don't set anything in case
-            # the user already gave a good guess of what the parameters are
-            lindiff_inp['parameters_main'] = inp_d['parameters_main']
+            # for every run after the first one, the pinball hyperparameters are taken from the output of the
+            # last fitting workchain, which used the output trajectory of previous MD run to do fitting
 
-        if self.ctx.diff_counter < 3:
-            diffusion_parameters_d = lindiff_inp['diffusion_parameters'].get_dict()
-            diffusion_parameters_d['max_nr_of_replays'
-                                  ] = 1  # setting just one replay calculation in the first 2 iterations
-            # to reduce total simulation time.
-            lindiff_inp['diffusion_parameters'] = get_or_create_input_node(diffusion_parameters_d, store=True)
+            workchain = self.ctx.workchains_lindiff[-1]
+            create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
+            # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
+            kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
+                        parameters=get_or_create_input_node(orm.Dict, dict(
+                            step_index=-1,
+                            recenter=False,
+                            create_settings=True,
+                            complete_missing=create_missing), store=False),)
+            if create_missing:
+                kwargs['structure'] = self.ctx.current_structure
+                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.lindiff_inputs.md.pw.settings, store=False)
 
-        diff = LinDiffusionWorkChain(**lindiff_inp)
-        diff.label = '{}{}diff-{}'.format(self.label, '-' if self.label else '', self.ctx.diff_counter)
-        for attr_key in ('num_machines', 'walltime_seconds', 'code_string'):
-            diff.set_attribute(attr_key, self.get_attribute(attr_key))
-        if self.get_attr('num_mpiprocs_per_machine', 0):
-            diff._set_attr('num_mpiprocs_per_machine', self.get_attr('num_mpiprocs_per_machine'))
+            res = get_structure_from_trajectory(**kwargs)
+            
+            inputs['structure'] = res['structure']
+            self.ctx.current_structure = res['structure']
+            inputs.md['pw']['parameters']['IONS'].update({'ion_velocities': 'from_input'})
+            inputs.md['pw']['settings'] = res['settings'].get_dict()
+            # Since I start from previous trajectory, it has sufficiently equilibriated 
+            inputs.msd_parameters['equilibration_time_fs'] = 0
 
-        self.goto(self.check)
-        self.ctx.diff_counter += 1
-        returndict['{}_{}'.format(
-            self._diff_name,
-            str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0))
-        )] = diff
-        return returndict
+            # Updating the pinball hyperparameters
+            inputs.coefficients = self.ctx.workchains_fitting[-1].outputs.coefficients
+        
+        # Set the `CALL` link label
+        self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+        inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+
+        inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
+        running = self.submit(LinDiffusionWorkChain, **inputs)
+
+        self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
+        
+        return ToContext(workchains_lindiff=append_(running))
 
     def run_fit(self):
         """
-        Runs a fitting workflow on positions taken from the last trajectory
+        Runs a fitting workflow on positions taken from the output of the previous lindiff run
         """
-        from .fitting import get_configurations_from_trajectories_inline, FittingFromTrajectoryCalculation
-
-        diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
+        inputs = self.ctx.fitting_inputs
+        inputs['parent_folder'] = self.inputs.parent_folder
+        # There's no difference between the first and subsequent runs so I don't change anything
+        inputs['structure'] = self.ctx.current_structure
+        inputs.md['hustler_snapshots'] = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
         
-        # if first_fit_trajectory was specified, use it to perform an initial fit
+        # Set the `CALL` link label
+        self.inputs.metadata.call_link_label = f'fitting_{self.ctx.diffusion_counter:02d}'
+        inputs.metadata.label = f'fitting_{self.ctx.diffusion_counter:02d}'
+
+        inputs = prepare_process_inputs(FittingWorkChain, inputs)
+        running = self.submit(FittingWorkChain, **inputs)
+
+        self.ctx.diffusion_counter +=1
+        self.report(f'launching FittingWorkChain<{running.pk}>')
+        
+        return ToContext(workchains_fitting=append_(running))
+
+    def inspect_process(self):
+        """Inspect the results of the last `LinDiffusionWorkChain` and `FittingWorkChain`.
+
+        I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
+        """
+        # I don't need to check much, since the daughter workchains take care of themselves
         try:
-            first_fit_trajectory = self.inputs.first_fit_trajectory
-        except AttributeError:
-            first_fit_trajectory = None
-        if self.ctx.diff_counter == 0 and first_fit_trajectory:
-            trajectory = first_fit_trajectory
-        else:
-            lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1)[0]
-            trajectory = lastcalc.out.concatenated_trajectory
-
-        # Since I have not converged I need to run another fit calculation:
-        returndict = {}
-        # I need to launch a fitting calculation based on positions from the last diffusion estimate trajectory:
-        calc, res = get_configurations_from_trajectories_inline(
-            parameters=self.inputs.structure_fitting_parameters,
-            structure=self.inputs.structure,
-            trajectory=lastcalc.out.concatenated_trajectory)
-        returndict['get_configurations_{}'.format(str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))] = calc
-        pseudos = {k: v for k, v in self.get_inputs_dict().items() if isinstance(v, orm.UpfData)}
-        fit = FittingFromTrajectoryCalculation(
-            structure=self.inputs.structure,
-            remote_folder_flipper=self.inputs.remote_folder,
-            positions=res['positions'],
-            parameters=self.inputs.parameters_fitting,
-            parameters_dft=self.inputs.parameters_fitting_dft,
-            parameters_flipper=self.inputs.parameters_fitting_flipper,
-            code=self.inputs.hustler_code,
-            kpoints=self.inputs.kpoints,
-            settings=self.inputs.settings,
-            **pseudos
-        )
-        returndict['{}_{}'.format(self._fit_name, str(self.ctx.diff_counter).rjust(len(str(diffusion_convergence_parameters_d['max_iterations'])), str(0)))] = fit
-        self.goto(self.run_estimates)
-        return returndict
-
-    def check(self):
-        import numpy as np
-        diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
-        lastcalc = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=1)[0]
-
-        if diffusion_convergence_parameters_d['max_iterations'] <= self.ctx.diff_counter:
-            print('Cannot run more')
-            self.goto(self.collect)
-        elif lastcalc.get_state() == 'FAILED':
-            raise Exception(
-                'Last diffusion {} failed with message:\n{}'.format(lastcalc, lastcalc.get_attribute('fail_msg'))
-            )
-
-        elif diffusion_convergence_parameters_d['min_iterations'] > self.ctx.diff_counter:
-            # just launch the next!
-            print('Did not run enough')
-            self.goto(self.run_fit)
-        else:
+            species = self.ctx.lindiff_inputs.msd_parameters.get_dict()['species_of_interest'][0]
+        except: 
+            species = 'Li'
+        param_d = self.ctx.diffusion_convergence_parameters_d
+        # I will start checking when minimum no. of iterations are reached
+        if self.ctx.diffusion_counter >= param_d['min_ld_iterations']:
             # Since I am here, it means I need to check the last 3 calculations to
             # see whether I converged or need to run again:
             # Now let me see the diffusion coefficient that I get and if it's converged
             # I consider it converged if the last 3 estimates have not changed more than the threshold
-            # In case min_iterations == 2, I just use the last 2 calculations
-            if diffusion_convergence_parameters_d['min_iterations'] == 2:
-                last_diff_calculations = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=2)
-            else:
-                last_diff_calculations = self._get_last_diffs(diffusion_convergence_parameters_d=diffusion_convergence_parameters_d, nr_of_calcs=3)
 
-            diffusions = np.array([
-                calc.out.msd_results.get_attribute(diffusion_convergence_parameters_d['species'])['diffusion_mean_cm2_s']
-                for calc in last_diff_calculations
-            ])
-            if diffusions.std() < diffusion_convergence_parameters_d['diffusion_thr_cm2_s']:
-                # all good, I have converged!
-                print('Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s']))
-                self.ctx.converged = True
-                self.goto(self.collect)
-            elif (
-                'diffusion_thr_cm2_s_rel' in diffusion_convergence_parameters_d and
-                abs(diffusions.mean()) > 1e-12 and  # avoid division by 0
-                abs(diffusions.std() / diffusions.mean()
-                   ) < diffusion_convergence_parameters_d['diffusion_thr_cm2_s_rel']
-            ):
-                # Checked relative convergence by dividing the standard deviation by the mean
-                print('Diffusion converged (std = {} < threshold = {})'.format(diffusions.std(), diffusion_convergence_parameters_d['diffusion_thr_cm2_s']))
-                self.ctx.converged = True
-                self.got(self.collect)
-            else:
-                self.goto(self.run_fit)
+            diffusions = np.array([workchain_lindiff.outputs.msd_results.get_attribute(species)['diffusion_mean_cm2_s']
+                for workchain_lindiff in self.ctx.workchains_lindiff[-param_d['min_ld_iterations']:]])
 
-    def collect(self):
-        last_calc = self._get_last_diffs(nr_of_calcs=1)[-1]
-        self.goto(self.exit)
-        return {'converged_msd_results': last_calc.out.msd_results}
+            if diffusions.std() < param_d['diffusion_thr_cm2_s']:
+                # I have converged, yay me!
+                self.report(f'Diffusion converged with std = {diffusions.std()} < threshold = {param_d["diffusion_thr_cm2_s"]}')
+                self.ctx.converged = True
+            elif (abs(diffusions.mean()) > 1e-12 and  # to avoid division by 0
+                abs(diffusions.std() / diffusions.mean()) < param_d['diffusion_thr_cm2_s_rel']):
+                self.report(f'Diffusion converged with std = {diffusions.std()} < threshold = {param_d["diffusion_thr_cm2_s"]}')
+                self.ctx.converged = True
+            else:
+                self.report('The diffusion has not converged')
+                self.ctx.converged = False
+
+        return
+
+    def results(self):
+        """Retrun the output trajectory and diffusion coefficients generated in the last MD run."""
+        if self.ctx.converged and self.ctx.diffusion_counter <= self.ctx.diffusion_convergence_parameters_d['max_ld_iterations']:
+            self.report(f'workchain completed after {self.ctx.diffusion_counter} iterations')
+        else:
+            self.report('maximum number of LinDiffusion convergence iterations exceeded')
+
+        self.out('msd_results', self.ctx.workchains_lindiff[-1].outputs.msd_results)
+        self.out('total_trajectory', self.ctx.workchains_lindiff[-1].outputs.total_trajectory)
+        self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)

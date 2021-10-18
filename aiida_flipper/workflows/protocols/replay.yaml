@@ -3,7 +3,6 @@ default_inputs:
     metadata:
         label: ''
     nstep: 100000
-    total_energy_max_fluctuation: 300 # need to modify this
     meta_parameters:
         conv_thr_per_atom: 0.2e-9
         etot_conv_thr_per_atom: 1.e-5
