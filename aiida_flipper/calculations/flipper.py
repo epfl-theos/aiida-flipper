@@ -13,6 +13,7 @@ class FlipperCalculation(PwCalculation):
     _FOR_FILE = 'verlet.for'
     _VEL_FILE = 'verlet.vel'
     _POS_FILE = 'verlet.pos'
+    ## verlet.evp columns - timestep, time(ps), kinetic energy, potential energy, total energy, temperature, walltimes, scf_convergence
 
     @classmethod
     def define(cls, spec):

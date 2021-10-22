@@ -21,7 +21,7 @@ default_inputs:
     metadata:
         label: 'replay_'
     md:
-        nstep: 1.e+6 # 2.4ns
+        nstep: 1.e+6 # 1ns
         pw:
             settings:
                 gamma_only: True
@@ -29,7 +29,7 @@ default_inputs:
                 options:
                     resources: # For 128 threads in eiger
                         num_machines: 1
-                        num_cores_per_mpiproc: 2
+                        num_cores_per_mpiproc: 1
                         num_mpiprocs_per_machine: 64
                     max_wallclock_seconds: 43200  # 12 hours
                     withmpi: True

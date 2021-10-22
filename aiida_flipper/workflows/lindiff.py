@@ -124,7 +124,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         qb.append(orm.RemoteData, with_incoming='prepro', project='id')
         parent_folders = qb.all(flat=True)
         if not parent_folder.pk in parent_folders: 
-            raise Exception(f'the charge densities <{parent_folder.pk}> do not match with structure <{structure.pk}>')
+            print(f'the charge densities <{parent_folder.pk}> do not match with structure <{structure.pk}>')
+            print('Proceed at your own risk')
 
         args = (code, structure, parent_folder, protocol)
         replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
