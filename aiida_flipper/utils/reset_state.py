@@ -1,6 +1,6 @@
 #!/usr/bin/env runaiida
 
-from delete_nodes import delete_nodes_serial
+from aiida_flipper.utils.delete_nodes import delete_nodes_serial
 from aiida.common.datastructures import calc_states
 from sqlalchemy.sql import text
 from aiida.orm import load_node

@@ -1,7 +1,7 @@
 #!/usr/bin/env runaiida
 # -*- coding: utf-8 -*-
 
-from delete_nodes import delete_nodes_serial
+from aiida_flipper.utils.delete_nodes import delete_nodes_serial
 from aiida.common.links import LinkType
 from aiida.orm import load_node, Node
 from aiida.orm.calculation.chillstep import ChillstepCalculation
