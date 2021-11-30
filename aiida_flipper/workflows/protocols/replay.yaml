@@ -23,8 +23,8 @@ default_inputs:
                 dt: 20 # 1 femto seconds
                 lflipper: True
                 iprint: 10
-                ldecompose_forces: True
-                ldecompose_ewald: True
+                ldecompose_forces: False
+                ldecompose_ewald: False
                 flipper_do_nonloc: True
                 forc_conv_thr: 1.e-4
                 tprnfor: True

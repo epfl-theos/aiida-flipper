@@ -250,7 +250,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             ) from exception
 
         parameters = inputs['pw']['parameters']
-        parameters['CONTROL']['etot_conv_thr'] = natoms * meta_parameters['etot_conv_thr_per_atom']
+        # parameters['CONTROL']['etot_conv_thr'] = natoms * meta_parameters['etot_conv_thr_per_atom']
         parameters['ELECTRONS']['conv_thr'] = natoms * meta_parameters['conv_thr_per_atom']
         parameters['SYSTEM']['ecutwfc'] = cutoff_wfc
         parameters['SYSTEM']['ecutrho'] = cutoff_rho
@@ -367,9 +367,11 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                 wc, = qb.first()
             else:
                 self.report('Calcfunction associated with previous trajectory not found.')
-        if wc:
+        try:
             struct = wc.inputs['pw']['structure']
             if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+        except:
+            self.report('Provided trajectory does not match any calcfunction or workchain; continuing nonetheless')
 
     def set_max_seconds(self, max_wallclock_seconds):
         # called by self.validate_resources

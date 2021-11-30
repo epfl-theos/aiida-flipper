@@ -144,6 +144,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
         if coefficients: builder.coefficients = coefficients
 
+        # builder.msd_parameters['t_end_fit_fs'] = builder.md['nstep'].value * 0.7 * builder.md['pw']['parameters']['CONTROL']['dt'] * 4.8378 * 10**-2
+
         return builder
 
     def should_run_process(self):
@@ -217,6 +219,9 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         try:
             trajectory = workchain.outputs.total_trajectory
+            # setting up the fitting window 
+            self.ctx.msd_parameters_d['t_end_fit_fs'] = round(trajectory.attributes['sim_time_fs'] * self.ctx.msd_parameters_d.pop('t_fit_fraction'))
+
         except Exception:
             self.report('the Md run with ReplayMDWorkChain did not generate output trajectory')
             

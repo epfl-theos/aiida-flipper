@@ -46,6 +46,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             cls.run_fit,
             cls.inspect_process,
             ),
+            cls.run_last_lindiff,
             cls.results,
         )
 
@@ -78,6 +79,18 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.lindiff_inputs = AttributeDict(self.exposed_inputs(LinDiffusionWorkChain, namespace='ld'))
         self.ctx.fitting_inputs = AttributeDict(self.exposed_inputs(FittingWorkChain, namespace='ft'))
         self.ctx.lindiff_inputs.md.pw.settings = self.ctx.lindiff_inputs.md.pw.settings.get_dict()
+        # Without putting as a dict inside the namespace of lindiff, msd_parameters can't be updated later
+        self.ctx.lindiff_inputs.msd_parameters = self.ctx.lindiff_inputs.msd_parameters.get_dict()
+        if self.ctx.lindiff_inputs.coefficients:
+            self.ctx.diffusion_counter = 1
+            # Adding the fitting and lindiff workchains that generated this pinball parameter for 
+            qb = orm.QueryBuilder()
+            qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
+            qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
+            self.ctx.workchains_fitting = qb.all(flat=True)
+            qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
+            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
+            self.ctx.workchains_lindiff = qb.all(flat=True)
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -172,8 +185,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs.md['pw']['parameters']['IONS'].update({'ion_velocities': 'from_input'})
             inputs.md['pw']['settings'] = res['settings'].get_dict()
             # Since I start from previous trajectory, it has sufficiently equilibriated 
-            inputs.msd_parameters['equilibration_time_fs'] = 0
-
+            inputs.msd_parameters.update({'equilibration_time_fs': 0})
+            
             # Updating the pinball hyperparameters
             inputs.coefficients = self.ctx.workchains_fitting[-1].outputs.coefficients
         
@@ -225,25 +238,76 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         if self.ctx.diffusion_counter >= param_d['min_ld_iterations']:
             # Since I am here, it means I need to check the last 3 calculations to
             # see whether I converged or need to run again:
-            # Now let me see the diffusion coefficient that I get and if it's converged
-            # I consider it converged if the last 3 estimates have not changed more than the threshold
+            # Now let me see the pinball coefficients that I get and if they have converged
+            # I consider it converged if either the last 3 estimates have not changed more than the threshold or the difference of the last 2 estimates is within the threshold
 
-            diffusions = np.array([workchain_lindiff.outputs.msd_results.get_attribute(species)['diffusion_mean_cm2_s']
-                for workchain_lindiff in self.ctx.workchains_lindiff[-param_d['min_ld_iterations']:]])
+            coefficients = np.array([workchain_fitting.outputs.coefficients.get_dict()['coefs'] for workchain_fitting in self.ctx.workchains_fitting])
+            stddev_3 = np.std(coefficients[-3:], axis=0)
+            # checking the variation (relative error) in last 2 fits, if the standard deviation of last 3 fits is too high
+            difference_2 = abs((coefficients[-1]-coefficients[-2])/coefficients[-1])
 
-            if diffusions.std() < param_d['diffusion_thr_cm2_s']:
+            if (stddev_3 < param_d['coefficient_threshold_std']).all() and (difference_2 < param_d['coefficient_threshold_diff']).all():
                 # I have converged, yay me!
-                self.report(f'Diffusion converged with std = {diffusions.std()} < threshold = {param_d["diffusion_thr_cm2_s"]}')
+                self.report(f'Diffusion converged with std = {stddev_3} < threshold = {param_d["coefficient_threshold_std"]}')
                 self.ctx.converged = True
-            elif (abs(diffusions.mean()) > 1e-12 and  # to avoid division by 0
-                abs(diffusions.std() / diffusions.mean()) < param_d['diffusion_thr_cm2_s_rel']):
-                self.report(f'Diffusion converged with std = {diffusions.std()} < threshold = {param_d["diffusion_thr_cm2_s"]}')
+            elif (difference_2 < param_d['coefficient_threshold_diff']).all():
+                self.report(f'Last two estimates of Pinball parameters have converged with relative error = {difference_2} < threshold = {param_d["coefficient_threshold_diff"]}')
                 self.ctx.converged = True
+            elif (stddev_3 < param_d['coefficient_threshold_std']).any() and (difference_2 < param_d['coefficient_threshold_diff']).any():
+                self.report(f'Not all Pinball parameters have converged with std = {stddev_3} and relative error = {difference_2}, so I start another MD iteration')
+                self.ctx.converged = False
             else:
-                self.report('The diffusion has not converged')
+                self.report(f'The Pinball parameters have not converged with std = {stddev_3} and relative error = {difference_2}')
                 self.ctx.converged = False
 
         return
+
+    def run_last_lindiff(self):
+        """
+        Runs a final LinDiffusionWorkChain after converging Pinball parameters, starting from the previous trajectory.
+        This is the MD run that to be used for all post processing.
+        """
+        inputs = self.ctx.lindiff_inputs
+        inputs['parent_folder'] = self.inputs.parent_folder
+
+        # I use the last estimated Pinball parameters along with the last output trajectory
+        workchain = self.ctx.workchains_lindiff[-1]
+        create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
+        # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
+        kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
+                    parameters=get_or_create_input_node(orm.Dict, dict(
+                        step_index=-1,
+                        recenter=False,
+                        create_settings=True,
+                        complete_missing=create_missing), store=False),)
+        if create_missing:
+            kwargs['structure'] = self.ctx.current_structure
+            kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.lindiff_inputs.md.pw.settings, store=False)
+
+        res = get_structure_from_trajectory(**kwargs)
+        
+        inputs['structure'] = res['structure']
+        self.ctx.current_structure = res['structure']
+        inputs.md['pw']['parameters']['IONS'].update({'ion_velocities': 'from_input'})
+        inputs.md['pw']['settings'] = res['settings'].get_dict()
+        # Since I start from previous trajectory, it has sufficiently equilibriated 
+
+        # Updating the pinball hyperparameters
+        inputs.coefficients = self.ctx.workchains_fitting[-1].outputs.coefficients
+
+        # Starting from previous trajectory
+        inputs.md.previous_trajectory = workchain.outputs.total_trajectory
+        
+        # Set the `CALL` link label
+        self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+        inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+
+        inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
+        running = self.submit(LinDiffusionWorkChain, **inputs)
+
+        self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
+        
+        return ToContext(workchains_lindiff=append_(running))
 
     def results(self):
         """Retrun the output trajectory and diffusion coefficients generated in the last MD run."""

@@ -14,12 +14,12 @@ default_inputs:
                 gamma_only: True
             metadata:
                 options:
-                    resources: # For 128 threads in eiger
+                    resources: # For 256 threads in eiger
                         num_machines: 1
-                        num_cores_per_mpiproc: 1
-                        num_mpiprocs_per_machine: 64
+                        #num_cores_per_mpiproc: 1
+                        #num_mpiprocs_per_machine: 64
                     max_wallclock_seconds: 900  # it shouldn't take even this long
-                    queue_name: 'debug' # short calculations, so better to run on debug node
+                    #queue_name: 'debug' # short calculations, so better to run on debug node
                     withmpi: True
             parameters:
                 CONTROL:

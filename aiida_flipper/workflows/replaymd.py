@@ -287,7 +287,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             ) from exception
 
         parameters = inputs['pw']['parameters']
-        parameters['CONTROL']['etot_conv_thr'] = natoms * meta_parameters['etot_conv_thr_per_atom']
+        # parameters['CONTROL']['etot_conv_thr'] = natoms * meta_parameters['etot_conv_thr_per_atom']
         parameters['ELECTRONS']['conv_thr'] = natoms * meta_parameters['conv_thr_per_atom']
         parameters['SYSTEM']['ecutwfc'] = cutoff_wfc
         parameters['SYSTEM']['ecutrho'] = cutoff_rho
@@ -327,7 +327,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         if total_energy_max_fluctuation: 
             builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
         else: 
-            builder['total_energy_max_fluctuation'] = orm.Float(0.5 * 1.e6 * parameters['CONTROL']['etot_conv_thr'])
+            builder['total_energy_max_fluctuation'] = orm.Float(0.5 * 1.e4 * natoms * meta_parameters['etot_conv_thr_per_atom'])
         if previous_trajectory: builder['previous_trajectory'] = previous_trajectory
         # pylint: enable=no-member
         return builder
