@@ -1,0 +1,21 @@
+default_inputs:
+    clean_workdir: False
+    diffusion_convergence_parameters:
+        'max_ld_iterations': 5 
+        'min_ld_iterations': 3
+        'coefficient_threshold_std': 0.5 # 1st fit could be very different
+        'coefficient_threshold_diff': 0.15 # so we have this criterion
+    metadata:
+        label: ''
+    ld:
+            
+    ft:
+        
+default_protocol: moderate
+protocols:
+    moderate:
+        description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
+    precise:
+        description: 'Protocol to perform the computation at high precision at higher computational cost.'
+    fast:
+        description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
