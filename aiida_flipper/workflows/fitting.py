@@ -119,6 +119,11 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         replay.pop('clean_workdir', None)
         replay['pw'].pop('parent_folder', None)
 
+        # For fireworks scheduler, setting up the required resources options
+        if 'fw' in code.get_computer_label(): 
+            replay['pw']['metadata']['options']['resources'].pop('num_machines')
+            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 2
+
         builder = cls.get_builder()
         builder.md = replay
 
@@ -136,10 +141,10 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         inputs.nstep = self.ctx.hustler_steps
         inputs.pw['parent_folder'] = self.inputs.parent_folder
         inputs.pw['structure'] = self.ctx.current_structure
-        inputs.pw['parameters']['CONTROL']['lflipper'] = True
-        inputs.pw['parameters']['CONTROL']['ldecompose_forces'] = True
-        inputs.pw['parameters']['CONTROL']['ldecompose_ewald'] = True
-        inputs.pw['parameters']['CONTROL']['flipper_do_nonloc'] = True
+        # inputs.pw['parameters']['CONTROL']['lflipper'] = True
+        # inputs.pw['parameters']['CONTROL']['ldecompose_forces'] = True
+        # inputs.pw['parameters']['CONTROL']['ldecompose_ewald'] = True
+        # inputs.pw['parameters']['CONTROL']['flipper_do_nonloc'] = True
                     
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = 'replayh_pb'

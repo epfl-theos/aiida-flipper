@@ -3,7 +3,7 @@
 Pinball pw.x. based on Quantum ESPRESSO and fit pinball hyperparameters resepectively"""
 import numpy as np
 from aiida import orm
-from aiida.common import AttributeDict
+from aiida.common import AttributeDict, exceptions
 from aiida.engine import ToContext, append_, if_, while_, WorkChain
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
@@ -81,16 +81,22 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.lindiff_inputs.md.pw.settings = self.ctx.lindiff_inputs.md.pw.settings.get_dict()
         # Without putting as a dict inside the namespace of lindiff, msd_parameters can't be updated later
         self.ctx.lindiff_inputs.msd_parameters = self.ctx.lindiff_inputs.msd_parameters.get_dict()
-        if self.ctx.lindiff_inputs.coefficients:
-            self.ctx.diffusion_counter = 1
-            # Adding the fitting and lindiff workchains that generated this pinball parameter for 
-            qb = orm.QueryBuilder()
-            qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
-            qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
-            self.ctx.workchains_fitting = qb.all(flat=True)
-            qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
-            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
-            self.ctx.workchains_lindiff = qb.all(flat=True)
+        self.ctx.lindiff_inputs.diffusion_parameters = self.ctx.lindiff_inputs.diffusion_parameters.get_dict()
+        # I store this in context variable to update for every MD run after the first one
+        self.ctx.max_lindiff_iterations = self.ctx.lindiff_inputs.diffusion_parameters['max_md_iterations']
+        try:
+            if self.ctx.lindiff_inputs.coefficients:
+                self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
+                self.ctx.diffusion_counter = 1
+                # Adding the fitting and lindiff workchains that generated this pinball parameter 
+                qb = orm.QueryBuilder()
+                qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
+                qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
+                self.ctx.workchains_fitting = qb.all(flat=True)
+                qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
+                qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
+                self.ctx.workchains_lindiff = qb.all(flat=True)
+        except: pass
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -160,6 +166,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         if (self.ctx.diffusion_counter == 0):
             # if this is first run, then I launch an unmodified LinDiffusionWorkChain
             inputs['structure'] = self.ctx.current_structure
+            # Since this is a first run, I don't want to run for too long
+            inputs.diffusion_parameters.update({'max_md_iterations': 1})
 
         else:
             # for every run after the first one, the pinball hyperparameters are taken from the output of the
@@ -186,7 +194,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs.md['pw']['settings'] = res['settings'].get_dict()
             # Since I start from previous trajectory, it has sufficiently equilibriated 
             inputs.msd_parameters.update({'equilibration_time_fs': 0})
-            
+            # I need to use the input value for every run after first one
+            inputs.diffusion_parameters.update({'max_md_iterations': self.ctx.max_lindiff_iterations})
             # Updating the pinball hyperparameters
             inputs.coefficients = self.ctx.workchains_fitting[-1].outputs.coefficients
         

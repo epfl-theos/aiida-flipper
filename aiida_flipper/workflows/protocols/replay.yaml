@@ -15,7 +15,7 @@ default_inputs:
                 parser_name: 'quantumespresso.flipper'
                 resources:
                     num_machines: 1
-                max_wallclock_seconds: 43200  # Twelve hours
+                max_wallclock_seconds: 42200  # Twelve hours
                 withmpi: True
         parameters:
             CONTROL:

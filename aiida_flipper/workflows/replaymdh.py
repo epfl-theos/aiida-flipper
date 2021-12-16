@@ -353,9 +353,11 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         hustler_snapshots = self.inputs.get('hustler_snapshots')
         qb = orm.QueryBuilder()
         qb.append(orm.TrajectoryData, filters={'id':{'==':hustler_snapshots.pk}}, tag='traj')
-        qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='traj', tag='replay')
+        qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj')
         if qb.count():
-            wc, = qb.first()
+            cc, = qb.first()
+            struct = cc.inputs['structure']
+            if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
         else:
             self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
             qb = orm.QueryBuilder()
@@ -365,13 +367,10 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='old_traj', tag='replay')
             if qb.count():
                 wc, = qb.first()
+                struct = wc.inputs['pw']['structure']
+                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
             else:
-                self.report('Calcfunction associated with previous trajectory not found.')
-        try:
-            struct = wc.inputs['pw']['structure']
-            if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
-        except:
-            self.report('Provided trajectory does not match any calcfunction or workchain; continuing nonetheless')
+                self.report('Provided trajectory does not match any calcfunction or workchain; continuing nonetheless')
 
     def set_max_seconds(self, max_wallclock_seconds):
         # called by self.validate_resources

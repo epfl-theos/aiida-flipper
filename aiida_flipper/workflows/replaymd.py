@@ -397,11 +397,16 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
             qb = orm.QueryBuilder()
             qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
-            qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='traj', tag='replay')
+            qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj')
             if qb.count():
-                wc, = qb.first()
+                cc, = qb.first()
+                param_d = cc.inputs['parameters'].get_dict()
+                struct = cc.inputs['structure']
+                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
+                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
             else:
-                self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
+                self.report('WorkChain of previous trajectory not found, trying preceding concatenating calcfunction')
                 qb = orm.QueryBuilder()
                 qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
                 qb.append(orm.CalcFunctionNode, with_outgoing='traj', tag='calcfunc')
@@ -409,15 +414,13 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='old_traj', tag='replay')
                 if qb.count():
                     wc, = qb.first()
+                    param_d = wc.inputs['pw']['parameters'].get_dict()
+                    struct = wc.inputs['pw']['structure']
+                    if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+                    if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
+                    if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
                 else:
-                    self.report('Calcfunction associated with previous trajectory not found.')
-            if wc:
-                param_d = wc.inputs['pw']['parameters'].get_dict()
-                struct = wc.inputs['pw']['structure']
-                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
-                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
-                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
-        else: self.ctx.previous_trajectory = None
+                    self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')                    
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -583,8 +586,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 if (diff > total_energy_max_fluctuation):
                     self.report(
                         '{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} EXCEEDED THRESHOLD {} !!'
-                        '  Aborting...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
-                    return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
+                        ' Continuing anyway...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
+                    # return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
                 else:
                     self.report('{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} < threshold ({}) OK'.format(
                                     calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))

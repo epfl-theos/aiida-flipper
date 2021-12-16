@@ -80,11 +80,18 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.replay_inputs.pw.settings = self.ctx.replay_inputs.pw.settings.get_dict()
         self.ctx.msd_parameters_d = self.inputs.msd_parameters.get_dict()
         self.ctx.diffusion_parameters_d = self.inputs.diffusion_parameters.get_dict()
+
+        # MSD dict cannot contain items not recognised by SAMOS
+        self.ctx.t_fit_fraction = self.ctx.msd_parameters_d.pop('t_fit_fraction')
+        
         # I load the pinball hyper parameters here
+        # change how its loaded depending on 3 coefficients or 4
         try:
             coefs = self.inputs.coefficients.get_attribute('coefs')
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_local_factor'] = coefs[0]
-            self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
+            if self.ctx.replay_inputs.pw.parameters['CONTROL']['flipper_do_nonloc']: 
+                # no need to add the non local factor if it is disabled
+                self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_nonlocal_correction'] = coefs[1]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
             self.report(f'launching WorkChain with pinball coefficients defined by <{self.inputs.coefficients.pk}>')
@@ -133,6 +140,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         replay['pw'].pop('structure', None)
         replay.pop('clean_workdir', None)
         replay['pw'].pop('parent_folder', None)
+
+        # For fireworks scheduler, setting up the required resources options
+        if 'fw' in code.get_computer_label(): 
+            replay['pw']['metadata']['options']['resources'].pop('num_machines')
+            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 2
 
         builder = cls.get_builder()
         builder.md = replay
@@ -220,7 +232,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         try:
             trajectory = workchain.outputs.total_trajectory
             # setting up the fitting window 
-            self.ctx.msd_parameters_d['t_end_fit_fs'] = round(trajectory.attributes['sim_time_fs'] * self.ctx.msd_parameters_d.pop('t_fit_fraction'))
+            self.ctx.msd_parameters_d['t_end_fit_fs'] = round(trajectory.attributes['sim_time_fs'] * self.ctx.t_fit_fraction)
 
         except Exception:
             self.report('the Md run with ReplayMDWorkChain did not generate output trajectory')
