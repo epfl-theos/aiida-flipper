@@ -30,10 +30,7 @@ FlipperCalculation = CalculationFactory('quantumespresso.flipper')
 
 def get_completed_number_of_steps(calc):
     """Read the number of steps from the trajectory."""
-    try:
-        traj = calc.outputs.output_trajectory
-    except exceptions.NotExistent:
-        raise Exception('Output trajectory not found.')
+    traj = calc.outputs.output_trajectory
     nstep = calc.inputs.parameters.get_attribute('CONTROL').get('iprint', 1) * \
                 (traj.get_attribute('array|positions')[0] - 1)  # the zeroth step is also saved
     return nstep
@@ -503,7 +500,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
             #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'restart'  ## NOT NEEDED IN PINBALL
-        elif self.ctx.previous_trajectory:
+        elif self.inputs.get('previous_trajectory'):
             self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
             kwargs = {'trajectory': self.ctx.previous_trajectory,
                       'parameters': get_or_create_input_node(orm.Dict,
@@ -635,7 +632,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
     def results(self):  # pylint: disable=inconsistent-return-statements
         """Concatenate the trajectories and attach the outputs."""
         # get the concatenated trajectory, even if the max number of iterations have been reached
-        if self.ctx.previous_trajectory:
+        if self.inputs.get('previous_trajectory'):
             traj = get_total_trajectory(self, self.ctx.previous_trajectory, store=True)
         else:
             traj = get_total_trajectory(self, store=True)

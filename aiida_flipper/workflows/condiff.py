@@ -84,19 +84,17 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.lindiff_inputs.diffusion_parameters = self.ctx.lindiff_inputs.diffusion_parameters.get_dict()
         # I store this in context variable to update for every MD run after the first one
         self.ctx.max_lindiff_iterations = self.ctx.lindiff_inputs.diffusion_parameters['max_md_iterations']
-        try:
-            if self.ctx.lindiff_inputs.coefficients:
-                self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
-                self.ctx.diffusion_counter = 1
-                # Adding the fitting and lindiff workchains that generated this pinball parameter 
-                qb = orm.QueryBuilder()
-                qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
-                qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
-                self.ctx.workchains_fitting = qb.all(flat=True)
-                qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
-                qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
-                self.ctx.workchains_lindiff = qb.all(flat=True)
-        except: pass
+        if self.ctx.lindiff_inputs.get('coefficients'):
+            self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
+            self.ctx.diffusion_counter = 1
+            # Adding the fitting and lindiff workchains that generated this pinball parameter 
+            qb = orm.QueryBuilder()
+            qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
+            qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
+            self.ctx.workchains_fitting = qb.all(flat=True)
+            qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
+            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
+            self.ctx.workchains_lindiff = qb.all(flat=True)
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -239,7 +237,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         """
         # I don't need to check much, since the daughter workchains take care of themselves
         try:
-            species = self.ctx.lindiff_inputs.msd_parameters.get_dict()['species_of_interest'][0]
+            species = self.ctx.lindiff_inputs.msd_parameters['species_of_interest'][0]
         except: 
             species = 'Li'
         param_d = self.ctx.diffusion_convergence_parameters_d

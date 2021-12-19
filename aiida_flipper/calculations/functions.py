@@ -301,9 +301,9 @@ def get_pinball_factors(trajectory_dft, trajectory_pb):
     for idx in range(1,5): traj_pb_forces_rereshaped.append(traj_pb_forces_reshaped[:,idx,:].flatten())
     traj_dft_forces_reshaped = traj_dft_forces.flatten()
     
-    # traj_pb_forces_rereshaped.pop(1)
+    traj_pb_forces_rereshaped.pop(1)
     coefs, sum_res, rank, s =  np.linalg.lstsq(np.array(traj_pb_forces_rereshaped).T, traj_dft_forces_reshaped, rcond=None)
-    # coefs = np.insert(coefs, 1, 0)
+    coefs = np.insert(coefs, 1, 0)
     mae = np.sqrt(sum_res / len(traj_dft_forces_reshaped))
     r2 = 1.0 - sum_res / traj_dft_forces_reshaped.var() / len(traj_dft_forces_reshaped)
     if r2.size > 0: coefs /= r2

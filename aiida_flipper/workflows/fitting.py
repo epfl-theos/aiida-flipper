@@ -199,7 +199,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
 
             try:
                 trajectory = workchain.outputs.total_trajectory
-            except Exception:
+            except (KeyError, exceptions.NotExistent):
                 self.report(f'the Md run with ReplayMDHustlerWorkChain<{workchain.pk}> finished successfully but without output trajectory')
                 return self.exit_codes.ERROR_TRAJECTORY_NOT_FOUND
 

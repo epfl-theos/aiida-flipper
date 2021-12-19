@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Workchain to call MD workchains using Pinball pw.x. based on Quantum ESPRESSO"""
 from aiida import orm
-from aiida.common import AttributeDict
+from aiida.common import AttributeDict, exceptions
 from aiida.engine import BaseRestartWorkChain, ToContext, if_, while_, append_
 from aiida.plugins import WorkflowFactory
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
@@ -86,7 +86,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         
         # I load the pinball hyper parameters here
         # change how its loaded depending on 3 coefficients or 4
-        try:
+        if self.inputs.get('coefficients'):
             coefs = self.inputs.coefficients.get_attribute('coefs')
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_local_factor'] = coefs[0]
             if self.ctx.replay_inputs.pw.parameters['CONTROL']['flipper_do_nonloc']: 
@@ -95,7 +95,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
             self.report(f'launching WorkChain with pinball coefficients defined by <{self.inputs.coefficients.pk}>')
-        except Exception: self.report(f'launching WorkChain without any pinball hyperparameters')
+        else: self.report(f'launching WorkChain without any pinball hyperparameters')
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -185,7 +185,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
             # This input can only be used by the first MD run that I call.
             try: inputs.pop('previous_trajectory', None)
-            except Exception: pass
+            except: pass
 
             workchain = self.ctx.workchains[-1]
             create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
@@ -233,8 +233,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             trajectory = workchain.outputs.total_trajectory
             # setting up the fitting window 
             self.ctx.msd_parameters_d['t_end_fit_fs'] = round(trajectory.attributes['sim_time_fs'] * self.ctx.t_fit_fraction)
-
-        except Exception:
+        except (KeyError, exceptions.NotExistent):
             self.report('the Md run with ReplayMDWorkChain did not generate output trajectory')
             
             if workchain.is_excepted or workchain.is_killed:

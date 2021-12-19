@@ -26,10 +26,7 @@ HustlerCalculation = CalculationFactory('quantumespresso.hustler')
 
 def get_completed_number_of_steps(calc):
     """Read the number of steps from the trajectory."""
-    try:
-        traj = calc.outputs.output_trajectory
-    except exceptions.NotExistent:
-        raise Exception('Output trajectory not found.')
+    traj = calc.outputs.output_trajectory
     nstep = calc.inputs.parameters.get_attribute('CONTROL').get('iprint', 1) * \
                 (traj.get_attribute('array|positions')[0])  # the zeroth step is not the starting input anymore
     return nstep
