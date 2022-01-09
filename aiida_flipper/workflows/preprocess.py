@@ -15,7 +15,7 @@ PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 
 def make_supercell(structure, distance):
     from supercellor import supercell as sc
-    pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0)[0]
+    pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0, do_niggli_first=False)[0]
     sc_struct = orm.StructureData()
     sc_struct.set_extra('original_unitcell', structure.uuid)
     sc_struct.set_pymatgen(pym_sc_struct)
