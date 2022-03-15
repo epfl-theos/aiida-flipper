@@ -301,9 +301,9 @@ def get_pinball_factors(trajectory_dft, trajectory_pb):
     for idx in range(1,5): traj_pb_forces_rereshaped.append(traj_pb_forces_reshaped[:,idx,:].flatten())
     traj_dft_forces_reshaped = traj_dft_forces.flatten()
     
-    traj_pb_forces_rereshaped.pop(1)
+    if (traj_pb_forces_rereshaped[1] == 0).all(): traj_pb_forces_rereshaped.pop(1)
     coefs, sum_res, rank, s =  np.linalg.lstsq(np.array(traj_pb_forces_rereshaped).T, traj_dft_forces_reshaped, rcond=None)
-    coefs = np.insert(coefs, 1, 0)
+    if len(coefs) == 3: coefs = np.insert(coefs, 1, 0)
     mae = np.sqrt(sum_res / len(traj_dft_forces_reshaped))
     r2 = 1.0 - sum_res / traj_dft_forces_reshaped.var() / len(traj_dft_forces_reshaped)
     if r2.size > 0: coefs /= r2
@@ -313,9 +313,9 @@ def get_pinball_factors(trajectory_dft, trajectory_pb):
     fitted_force = np.zeros((nstep*nat, 3))
     for i, coef in enumerate(coefs): fitted_force[:,:] += coef*traj_pb_forces_reshaped[:,i+1,:]
     
-    slope_before_fit, intercept_before_fit, rvalue_before_fit, pvalue_before_fit, stderr_before_fit = linregress(traj_dft_forces_reshaped.flatten(), fitted_force.flatten())
-    slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(traj_dft_forces_reshaped.flatten(), traj_pb_forces_reshaped[:,0,:].flatten())
-
+    slope_before_fit, intercept_before_fit, rvalue_before_fit, pvalue_before_fit, stderr_before_fit = linregress(traj_dft_forces_reshaped.flatten(), traj_pb_forces_reshaped[:,0,:].flatten())
+    slope_after_fit, intercept_after_fit, rvalue_after_fit, pvalue_after_fit, stderr_after_fit = linregress(traj_dft_forces_reshaped.flatten(), fitted_force.flatten())
+    
     coeff_params = orm.Dict(dict={
         'coefs': coefs.tolist(),
         'mae': mae_f,
