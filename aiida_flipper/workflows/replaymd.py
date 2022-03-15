@@ -583,8 +583,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 if (diff > total_energy_max_fluctuation):
                     self.report(
                         '{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} EXCEEDED THRESHOLD {} !!'
-                        ' Continuing anyway...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
-                    # return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
+                        ' Stopping now...'.format(calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
+                    return self.exit_codes.ERROR_TOTAL_ENERGY_FLUCTUATIONS
                 else:
                     self.report('{}<{}> [check_energy_fluctuations]: Total energy fluctuations = {} < threshold ({}) OK'.format(
                                     calculation.process_label, calculation.pk, diff, total_energy_max_fluctuation))
