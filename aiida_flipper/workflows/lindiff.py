@@ -144,7 +144,13 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # For fireworks scheduler, setting up the required resources options
         if 'fw' in code.get_computer_label(): 
             replay['pw']['metadata']['options']['resources'].pop('num_machines')
-            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 2
+            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 32
+
+        # For hyperqueue scheduler, setting up the required resources options
+        if 'hq' in code.get_computer_label(): 
+            replay['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
+            replay['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
+            replay['pw']['metadata']['options']['resources']['num_cores'] = 32
 
         builder = cls.get_builder()
         builder.md = replay

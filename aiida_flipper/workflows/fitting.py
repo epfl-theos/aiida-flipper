@@ -75,6 +75,8 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         forces_to_fit = self.ctx.fitting_parameters_d['forces_to_fit']
         pinballs = [s for s in self.ctx.current_structure.sites if s.kind_name == 'Li']
         self.ctx.hustler_steps = orm.Int(forces_to_fit/(len(pinballs)*3)+1)
+        # I store this in context variable to update the wallclock at dft and pinball level
+        self.ctx.max_wallclock_seconds = self.ctx.replay_inputs.pw['metadata']['options']['max_wallclock_seconds']
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -122,8 +124,14 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         # For fireworks scheduler, setting up the required resources options
         if 'fw' in code.get_computer_label(): 
             replay['pw']['metadata']['options']['resources'].pop('num_machines')
-            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 2
+            replay['pw']['metadata']['options']['resources']['tot_num_mpiprocs'] = 32
 
+        # For hyperqueue scheduler, setting up the required resources options
+        if 'hq' in code.get_computer_label(): 
+            replay['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
+            replay['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
+            replay['pw']['metadata']['options']['resources']['num_cores'] = 32
+        
         builder = cls.get_builder()
         builder.md = replay
 
@@ -141,6 +149,8 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         inputs.nstep = self.ctx.hustler_steps
         inputs.pw['parent_folder'] = self.inputs.parent_folder
         inputs.pw['structure'] = self.ctx.current_structure
+        # No need to request nodes for such long time
+        inputs.pw['metadata']['options']['max_wallclock_seconds'] = int(self.ctx.max_wallclock_seconds / 10)
         # inputs.pw['parameters']['CONTROL']['lflipper'] = True
         # inputs.pw['parameters']['CONTROL']['ldecompose_forces'] = True
         # inputs.pw['parameters']['CONTROL']['ldecompose_ewald'] = True
@@ -168,6 +178,8 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         inputs.pw['parameters']['CONTROL'].pop('ldecompose_forces')
         inputs.pw['parameters']['CONTROL'].pop('ldecompose_ewald')
         inputs.pw['parameters']['CONTROL'].pop('flipper_do_nonloc')
+        # Setting the wallclock to inputted value
+        inputs.pw['metadata']['options']['max_wallclock_seconds'] = int(self.ctx.max_wallclock_seconds)
 
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = 'replayh_dft'

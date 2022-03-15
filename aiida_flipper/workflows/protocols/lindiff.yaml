@@ -33,9 +33,9 @@ default_inputs:
                 options:
                     resources: # For 256 threads in eiger
                         num_machines: 1
-                        num_cores: 32
-                        # num_cores_per_mpiproc: 1
-                        # num_mpiprocs_per_machine: 64
+                        # num_cores: 32
+                        num_cores_per_mpiproc: 1
+                        num_mpiprocs_per_machine: 32
                     max_wallclock_seconds: 42200  # 12 hours
                     withmpi: True
 
