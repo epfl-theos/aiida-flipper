@@ -238,8 +238,20 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         # I don't need to check much, since the daughter workchains take care of themselves
         try:
             species = self.ctx.lindiff_inputs.msd_parameters['species_of_interest'][0]
-        except: 
+        except:
             species = 'Li'
+
+        try:
+            msd_results = self.ctx.workchains_lindiff[-1].outputs.msd_results
+        except (KeyError, exceptions.NotExistent):
+            self.report('the LinearDiffusion subworkchain failed to generate msd results')
+            return self.exit_codes.ERROR_LINDIFFUSION_FAILED
+        try:
+            coefs = self.ctx.workchains_fitting[-1].outputs.coefficients
+        except (KeyError, exceptions.NotExistent):
+            self.report('the Fitting subworkchain failed to generate coefficients')
+            return self.exit_codes.ERROR_FITTING_FAILED
+
         param_d = self.ctx.diffusion_convergence_parameters_d
         # I will start checking when minimum no. of iterations are reached
         if self.ctx.diffusion_counter >= param_d['min_ld_iterations']:
@@ -252,6 +264,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             stddev_3 = np.std(coefficients[-3:], axis=0)
             # checking the variation (relative error) in last 2 fits, if the standard deviation of last 3 fits is too high
             difference_2 = abs((coefficients[-1]-coefficients[-2])/coefficients[-1])
+            # For only local interactions, 2nd coefficient is always 0
+            if np.isnan(difference_2)[1]: difference_2[1] = 0
 
             if (stddev_3 < param_d['coefficient_threshold_std']).all() and (difference_2 < param_d['coefficient_threshold_diff']).all():
                 # I have converged, yay me!
@@ -278,32 +292,17 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         inputs['parent_folder'] = self.inputs.parent_folder
 
         # I use the last estimated Pinball parameters along with the last output trajectory
-        workchain = self.ctx.workchains_lindiff[-1]
-        create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
-        # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
-        kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
-                    parameters=get_or_create_input_node(orm.Dict, dict(
-                        step_index=-1,
-                        recenter=False,
-                        create_settings=True,
-                        complete_missing=create_missing), store=False),)
-        if create_missing:
-            kwargs['structure'] = self.ctx.current_structure
-            kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.lindiff_inputs.md.pw.settings, store=False)
-
-        res = get_structure_from_trajectory(**kwargs)
+                
+        inputs['structure'] = self.ctx.current_structure
+        # I double the length of simulation here
+        inputs.md['nstep'] *= 2
+        # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
         
-        inputs['structure'] = res['structure']
-        self.ctx.current_structure = res['structure']
-        inputs.md['pw']['parameters']['IONS'].update({'ion_velocities': 'from_input'})
-        inputs.md['pw']['settings'] = res['settings'].get_dict()
-        # Since I start from previous trajectory, it has sufficiently equilibriated 
-
         # Updating the pinball hyperparameters
-        inputs.coefficients = self.ctx.workchains_fitting[-1].outputs.coefficients
+        inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
 
         # Starting from previous trajectory
-        inputs.md.previous_trajectory = workchain.outputs.total_trajectory
+        inputs.md.previous_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
         
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
