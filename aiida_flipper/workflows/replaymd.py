@@ -13,15 +13,10 @@ SsspFamily = GroupFactory('pseudo.family.sssp')
 PseudoDojoFamily = GroupFactory('pseudo.family.pseudo_dojo')
 CutoffsPseudoPotentialFamily = GroupFactory('pseudo.family.cutoffs')
 
-#from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
 from aiida_quantumespresso.utils.defaults.calculation import pw as qe_defaults
-from aiida_quantumespresso.utils.mapping import update_mapping, prepare_process_inputs
-#from aiida_quantumespresso.utils.pseudopotential import validate_and_prepare_pseudos_inputs
-#from aiida_quantumespresso.utils.resources import get_default_options, get_pw_parallelization_parameters
-#from aiida_quantumespresso.utils.resources import cmdline_remove_npools, create_scheduler_resources
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
-from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
+from aiida_flipper.calculations.functions.functions import get_structure_from_trajectory, concatenate_trajectory
 
 PwCalculation = CalculationFactory('quantumespresso.pw')
 FlipperCalculation = CalculationFactory('quantumespresso.flipper')
@@ -444,7 +439,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 #        """
 
     def set_max_seconds(self, max_wallclock_seconds):
-        # called by self.validate_resources
         """Set the `max_seconds` to a fraction of `max_wallclock_seconds` option to prevent out-of-walltime problems.
 
         :param max_wallclock_seconds: the maximum wallclock time that will be set in the scheduler settings.
@@ -531,6 +525,11 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
             #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'from_scratch'  ## NOT NEEDED IN PINBALL
             #self.ctx.inputs.pop('parent_folder', None)
+
+        ## Setting wallclock option for smooth exit
+        max_wallclock_seconds = self.ctx.inputs.metadata.options.get('max_wallclock_seconds', None)
+        if max_wallclock_seconds is not None and 'max_seconds' not in self.ctx.inputs.parameters['CONTROL']: 
+            self.set_max_seconds(max_wallclock_seconds)
 
         self.ctx.inputs.parameters['CONTROL']['nstep'] = self.ctx.mdsteps_todo
         self.ctx.inputs.metadata['label'] = f'flipper_{self.ctx.iteration:02d}'

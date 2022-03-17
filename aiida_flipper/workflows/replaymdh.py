@@ -14,10 +14,9 @@ PseudoDojoFamily = GroupFactory('pseudo.family.pseudo_dojo')
 CutoffsPseudoPotentialFamily = GroupFactory('pseudo.family.cutoffs')
 
 from aiida_quantumespresso.utils.defaults.calculation import pw as qe_defaults
-from aiida_quantumespresso.utils.mapping import update_mapping, prepare_process_inputs
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
-from aiida_flipper.calculations.functions import get_structure_from_trajectory, concatenate_trajectory
+from aiida_flipper.calculations.functions.functions import concatenate_trajectory
 
 PwCalculation = CalculationFactory('quantumespresso.pw')
 # FlipperCalculation = CalculationFactory('quantumespresso.flipper')
@@ -370,7 +369,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                 self.report('Provided trajectory does not match any calcfunction or workchain; continuing nonetheless')
 
     def set_max_seconds(self, max_wallclock_seconds):
-        # called by self.validate_resources
         """Set the `max_seconds` to a fraction of `max_wallclock_seconds` option to prevent out-of-walltime problems.
 
         :param max_wallclock_seconds: the maximum wallclock time that will be set in the scheduler settings.
@@ -420,6 +418,11 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             traj.set_attribute('sim_time_fs', traj.get_array('steps').size * hustler_snapshots.get_attribute('timestep_in_fs'))
 
         self.ctx.inputs['hustler_snapshots'] = traj
+
+        ## Setting wallclock option for smooth exit
+        max_wallclock_seconds = self.ctx.inputs.metadata.options.get('max_wallclock_seconds', None)
+        if max_wallclock_seconds is not None and 'max_seconds' not in self.ctx.inputs.parameters['CONTROL']: 
+            self.set_max_seconds(max_wallclock_seconds)
 
     def update_mdsteps(self):
         """Get the number of steps of the last trajectory and update the counters. If there are more MD steps to do,

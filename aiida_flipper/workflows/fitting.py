@@ -12,7 +12,7 @@ import numpy as np
 
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_flipper.calculations.functions import get_pinball_factors
+from aiida_flipper.calculations.functions.functions import get_pinball_factors
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDHWorkChain = WorkflowFactory('quantumespresso.flipper.replaymdhustler')
