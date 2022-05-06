@@ -182,6 +182,13 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
                 prepro.kpoints = kpoints
             else: 
                 raise NotImplementedError('Only gamma k-points possible in flipper calculations, so it is recommended to use the same in host lattice calculation.')
+        
+        # For hyperqueue scheduler, setting up the required resources options
+        if 'hq' in code.get_computer_label(): 
+            prepro['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
+            prepro['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
+            prepro['pw']['metadata']['options']['resources']['num_cores'] = 32
+            prepro['pw']['metadata']['options']['resources']['memory_Mb'] = 50000
 
         builder = cls.get_builder()
         builder.prepro = prepro

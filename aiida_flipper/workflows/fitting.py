@@ -131,6 +131,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             replay['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
             replay['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
             replay['pw']['metadata']['options']['resources']['num_cores'] = 32
+            replay['pw']['metadata']['options']['resources']['memory_Mb'] = 50000
         
         builder = cls.get_builder()
         builder.md = replay
