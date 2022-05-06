@@ -298,6 +298,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         builder = cls.get_builder()
         builder.pw['code'] = code
         builder.pw['pseudos'] = pseudo_family.get_pseudos(structure=structure)
+        # removing the default Li pseudopotential so that user can provide the correct one 
+        builder.pw['pseudos'].pop('Li')
         builder.pw['structure'] = structure
         builder.pw['parameters'] = orm.Dict(dict=parameters)
         builder.pw['metadata'] = inputs['pw']['metadata']
