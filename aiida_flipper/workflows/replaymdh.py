@@ -99,7 +99,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         # yapf: disable
         # NOTE: input, outputs, and exit_codes are inherited from PwBaseWorkChain
         super().define(spec)
-        spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
+        spec.expose_inputs(HustlerCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
         spec.inputs['pw']['parent_folder'].required = True
@@ -159,7 +159,10 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         """
         super().setup()
         #self.ctx.restart_calc = None
-        #self.ctx.inputs = AttributeDict(self.exposed_inputs(PwCalculation, 'pw'))
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(HustlerCalculation, 'pw'))
+        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
+        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
+
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
@@ -296,8 +299,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         Also define dictionary `inputs` in the context, that will contain the inputs for the calculation that will be
         launched in the `run_calculation` step.
         """
-        #super().validate_parameters()
-        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
 
         if not self.ctx.inputs.parameters['CONTROL']['calculation'] == 'md':
             return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS
@@ -316,8 +317,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             nstep = inp_nstep.value
         self.ctx.mdsteps_todo = nstep
         self.ctx.nsteps = nstep
-
-        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
 
         # In the pinball, the parent folder contains the host-lattice charge density and is always given as input,
         # so this is done automatically during the setup:
