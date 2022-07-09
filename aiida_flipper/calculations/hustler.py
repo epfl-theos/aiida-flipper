@@ -27,7 +27,7 @@ class HustlerCalculation(PwCalculation):
         Following errors are taken from FlipperCalculation class
         """
         # Input TrajectoryData containing the snapshots that will be used to generate hustler.pos file
-        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=True,
+        spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=False,
             help='The trajectory containing the uncorrelated configurations, that shall be used to calculate DFT and pinball forces')
 
         # Unrecoverable errors
