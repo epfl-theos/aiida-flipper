@@ -225,7 +225,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             shape = traj.get_positions().shape
             # I should remove the first step before comparing
             if shape[0] != nstep:
-                self.report('Wrong shape of array returned by {} ({} vs {})'.format(traj.pk, shape, nstep))
+                self.report(f'Wrong shape of array returned by {traj.pk} ({shape} vs {nstep})')
                 # self.exit_codes.ERROR_FITTING_FAILED
 
         self.ctx.coefficients = get_pinball_factors(trajectory_dft, trajectory_pb)['coefficients']

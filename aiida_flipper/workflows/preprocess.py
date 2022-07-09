@@ -29,7 +29,7 @@ def delithiate_structure(structure, element_to_remove):
     sites as required for the flipper; the other structure has no Lithium
     """
     
-    assert isinstance(structure, orm.StructureData), "input structure needs to be an instance of {}".format(orm.StructureData)
+    assert isinstance(structure, orm.StructureData), f'input structure needs to be an instance of {orm.StructureData}'
 
     pinball_kinds = [kind for kind in structure.kinds if kind.symbol == element_to_remove]
 
