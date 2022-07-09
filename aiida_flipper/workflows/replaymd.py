@@ -320,8 +320,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
 
         builder['pw']['parent_folder'] = stash_directory
-        if nstep: builder['nstep'] = nstep
-        else: builder['nstep'] = orm.Int(inputs['nstep'])
+        builder['nstep'] = orm.Int(inputs['nstep'])
         if total_energy_max_fluctuation: 
             builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
         else: 
@@ -387,8 +386,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         # If trajectory is provided, check that the parameters are same across the 2 MD runs
         if self.inputs.get('previous_trajectory'):
-            self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
 
+            self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
             qb = orm.QueryBuilder()
             qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
             qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj')
@@ -414,7 +413,14 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                     if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
                     if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
                 else:
-                    self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')                    
+                    self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')     
+                   
+            # I update the mdsteps_todo here
+            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
+            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
+            # Even if the previous trajectory is longer than the required nsteps, I don't care, 
+            # mdsteps_todo will be -ve in that case and the replaymdwc will not be launched
+            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -515,9 +521,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
 
-            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
-            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
-            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
             self.report(f'launching WorkChain from a previous trajectory <{self.ctx.previous_trajectory.pk}>')
         
         else:
@@ -642,18 +645,18 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         else:
             self.report('No trajectories were produced!')
 #            return self.exit_codes.ERROR_NO_TRAJECTORY_PRODUCED
+        try:
+            node = self.ctx.children[self.ctx.iteration - 1]
+            # We check the `is_finished` attribute of the work chain and not the successfulness of the last process
+            # because the error handlers in the last iteration can have qualified a "failed" process as satisfactory
+            # for the outcome of the work chain and so have marked it as `is_finished=True`.
+            if not self.ctx.is_finished and self.ctx.iteration >= self.inputs.max_iterations.value:
+                self.report(f'reached the maximum number of iterations {self.inputs.max_iterations.valu}: last ran {self.ctx.process_name}<{node.pk}>')
+                return self.exit_codes.ERROR_MAXIMUM_ITERATIONS_EXCEEDED  # pylint: disable=no-member
+        except AttributeError:
+            self.report(f'workchain did not run since a previous trajectory<{self.ctx.previous_trajectory}> already had the required number of nsteps')
 
-        node = self.ctx.children[self.ctx.iteration - 1]
-
-        # We check the `is_finished` attribute of the work chain and not the successfulness of the last process
-        # because the error handlers in the last iteration can have qualified a "failed" process as satisfactory
-        # for the outcome of the work chain and so have marked it as `is_finished=True`.
-        if not self.ctx.is_finished and self.ctx.iteration >= self.inputs.max_iterations.value:
-            self.report('reached the maximum number of iterations {}: last ran {}<{}>'.format(
-                self.inputs.max_iterations.value, self.ctx.process_name, node.pk))
-            return self.exit_codes.ERROR_MAXIMUM_ITERATIONS_EXCEEDED  # pylint: disable=no-member
-
-        self.report('work chain completed after {} iterations'.format(self.ctx.iteration))
+        self.report(f'work chain completed after {self.ctx.iteration} iterations')
 
     def _wrap_bare_dict_inputs(self, port_namespace, inputs):
         """Wrap bare dictionaries in `inputs` in a `Dict` node if dictated by the corresponding inputs portnamespace.
