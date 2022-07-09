@@ -22,7 +22,7 @@ default_inputs:
     metadata:
         label: 'replay_'
     md:
-        nstep: 1.e+6 # 1.ns
+        nstep: 1.e+6 # 1 ns
         pw:
             settings:
                 gamma_only: True
@@ -46,7 +46,17 @@ protocols:
         description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
     precise:
         description: 'Protocol to perform the computation at high precision at higher computational cost.'
-        min_md_convergence_iterations: 5
+        diffusion_parameters:
+            'max_md_iterations': 5
+            'min_md_iterations': 2
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
-        min_md_convergence_iterations: 1
+        diffusion_parameters:
+            'max_md_iterations': 1
+        msd_parameters:
+            'equilibration_time_fs': 9.e+4
+            't_start_fit_fs' : 2.e+4 # 20 ps
+            't_end_fit_fs_length' : 1.e+5 # 100ps
+            't_fit_fraction' : 0.75 
+        md:
+            nstep: 7.e+5 # 0.7 ns
