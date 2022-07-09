@@ -1,6 +1,7 @@
 default_inputs:
     clean_workdir: False
     first_fit_with_random_rattling : True
+    run_last_lindiffusion: False
     diffusion_convergence_parameters:
         'max_ld_iterations': 5 
         'min_ld_iterations': 3

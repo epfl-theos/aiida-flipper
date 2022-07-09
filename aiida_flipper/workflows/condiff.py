@@ -37,6 +37,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
         spec.input('first_fit_with_random_rattling', valid_type=orm.Bool, required=False, help='If true I do a first fit of pinball hyperparameters using randomly rattled positions of the input structure instead of using unity as parameters.')
+        spec.input('run_last_lindiffusion', valid_type=orm.Bool, required=False, help='If true I do an additional run of lindiffusion workchain by doubling the `nstep` and using the previous pinball hyperparameters.')
         spec.input('diffusion_convergence_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing the parameters used to converge diffusion coefficient.')
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
@@ -88,7 +89,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.max_lindiff_iterations = self.ctx.lindiff_inputs.diffusion_parameters['max_md_iterations']
         if self.ctx.lindiff_inputs.get('coefficients'):
             self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
-            self.ctx.diffusion_counter = 1
+            self.ctx.diffusion_counter += 1
             # Adding the fitting and lindiff workchains that generated this pinball parameter 
             qb = orm.QueryBuilder()
             qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
@@ -199,7 +200,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         # I always use the original structure to start a new LinDiffusionWorkChain
         inputs['structure'] = self.ctx.current_structure
 
-        if (self.ctx.diffusion_counter == 0):
+        if (self.ctx.diffusion_counter == 1):
             # If this is first run, then I launch an unmodified LinDiffusionWorkChain
             # Since this is a first run, I don't want to run for too long
             inputs.diffusion_parameters.update({'max_md_iterations': 1})
@@ -311,32 +312,37 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         Runs a final LinDiffusionWorkChain after converging Pinball parameters, starting from the previous trajectory.
         This is the MD run that to be used for all post processing.
         """
-        inputs = self.ctx.lindiff_inputs
-        inputs['parent_folder'] = self.inputs.parent_folder
+        if self.inputs.get('run_last_lindiffusion'):
 
-        # I use the last estimated Pinball parameters along with the last output trajectory
-                
-        inputs['structure'] = self.ctx.current_structure
-        # I double the length of simulation here
-        inputs.md['nstep'] *= 2
-        # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
-        
-        # Updating the pinball hyperparameters
-        inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
+            inputs = self.ctx.lindiff_inputs
+            inputs['parent_folder'] = self.inputs.parent_folder
 
-        # Starting from previous trajectory
-        inputs.md.previous_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
-        
-        # Set the `CALL` link label
-        self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
-        inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+            # I use the last estimated Pinball parameters along with the last output trajectory
+                    
+            inputs['structure'] = self.ctx.current_structure
+            # I double the length of simulation here
+            inputs.md['nstep'] *= 1.5
+            inputs.msd_parameters['t_end_fit_fs_length'] *= 1.5
+            # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
+            
+            # Updating the pinball hyperparameters
+            inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
 
-        inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
-        running = self.submit(LinDiffusionWorkChain, **inputs)
+            # Starting from previous trajectory
+            inputs.md.previous_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
+            
+            # Set the `CALL` link label
+            self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+            inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
 
-        self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
-        
-        return ToContext(workchains_lindiff=append_(running))
+            inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
+            running = self.submit(LinDiffusionWorkChain, **inputs)
+
+            self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
+            
+            return ToContext(workchains_lindiff=append_(running))
+            
+        else: return
 
     def results(self):
         """Retrun the output trajectory and diffusion coefficients generated in the last MD run."""
