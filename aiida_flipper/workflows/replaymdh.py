@@ -179,7 +179,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         cls,
         code,
         structure,
-        stash_directory,
+        parent_folder,
         hustler_snapshots=None,
         nstep=None,
         protocol=None,
@@ -195,7 +195,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
-        :param stash_directory: the location of charge densities of host lattice
+        :param parent_folder: the location of charge densities of host lattice
         :param hustler_snapshots: a trajectory file typically the output of a/multiple flipper calculation(s) from which I shall extract `nstep` configurations
         :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces shall be evaluated
         :param protocol: protocol to use, if not specified, the default will be used.
@@ -286,7 +286,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             else: 
                 raise NotImplementedError('Only gamma k-points possible in hustler calculations.')
 
-        builder['pw']['parent_folder'] = stash_directory
+        builder['pw']['parent_folder'] = parent_folder
         if nstep: builder['nstep'] = nstep
         else: builder['nstep'] = orm.Int(inputs['nstep'])
 
