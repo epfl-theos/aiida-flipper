@@ -114,8 +114,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             print(f'the charge densities <{parent_folder.pk}> do not match with structure {structure.pk}')
             print('Proceed at your own risk')
 
-        args = (code, structure, parent_folder, protocol)
-        replay = ReplayMDHWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
+        replay = ReplayMDHWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
         replay.pop('clean_workdir', None)

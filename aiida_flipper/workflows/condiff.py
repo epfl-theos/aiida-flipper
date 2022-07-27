@@ -119,15 +119,16 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         """
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        args = (code, structure, parent_folder, protocol)
-        lindiff = LinDiffusionWorkChain.get_builder_from_protocol(*args, overrides=inputs['ld'], **kwargs)
+        # I cannot use args = (code, structure, parent_folder, protocol) in get_builder_from_protocol(*args) since the 
+        # order of the variables is different in the  of LinDiffusionWorkChain
+
+        lindiff = LinDiffusionWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, overrides=inputs['ld'], **kwargs)
 
         lindiff.pop('structure', None)
         lindiff.pop('clean_workdir', None)
         lindiff.pop('parent_folder', None)
 
-        args = (code, structure, parent_folder, protocol)
-        fitting = FittingWorkChain.get_builder_from_protocol(*args, overrides=inputs['ft'], **kwargs)
+        fitting = FittingWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, overrides=inputs['ft'], **kwargs)
 
         fitting.pop('structure', None)
         fitting.pop('clean_workdir', None)

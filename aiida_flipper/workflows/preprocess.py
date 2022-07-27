@@ -132,7 +132,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, distance, element_to_remove=None, stash_directory=None, protocol=None, overrides=None, **kwargs
+        cls, code, structure, protocol=None, overrides=None, distance=0, element_to_remove=None, stash_directory=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
@@ -159,9 +159,8 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         else: sc_struct = make_supercell(structure, distance)
         supercell = delithiate_structure(sc_struct, element)
 
-        args = (code, structure, protocol)
         PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-        prepro = PwBaseWorkChain.get_builder_from_protocol(*args, 
+        prepro = PwBaseWorkChain.get_builder_from_protocol(code=code, structure=structure, protocol=protocol, 
         electronic_type=ElectronicType.INSULATOR, overrides=inputs['prepro'], **kwargs)
 
         prepro['pw'].pop('structure', None)
