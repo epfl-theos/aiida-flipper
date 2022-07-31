@@ -89,12 +89,19 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.max_lindiff_iterations = self.ctx.lindiff_inputs.diffusion_parameters['max_md_iterations']
         if self.ctx.lindiff_inputs.get('coefficients'):
             self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
-            self.ctx.diffusion_counter += 1
             # Adding the fitting and lindiff workchains that generated this pinball parameter 
             qb = orm.QueryBuilder()
             qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
             qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
             self.ctx.workchains_fitting = qb.all(flat=True)
+            qb.append(WorkflowFactory('quantumespresso.flipper.convergediffusion'), with_outgoing='fit', tag='cond')
+            # I look for all fit and lindiff wcs that led to this coefficient
+            if qb.count() > 0:
+                qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_incoming='cond', tag='fit2')
+                self.ctx.workchains_fitting = list(set(qb.all(flat=True)))
+                qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='cond', tag='lin2')
+                self.ctx.workchains_lindiff = list(set(qb.all(flat=True)))
+            self.ctx.diffusion_counter += len(self.ctx.workchains_fitting)
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -160,7 +167,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         Runs a fitting workflow on positions generated from random rattling of input structure
         """
 
-        if self.inputs.get('first_fit_with_random_rattling'):
+        if self.inputs.get('first_fit_with_random_rattling') and self.ctx.diffusion_counter==0:
 
             inputs = self.ctx.fitting_inputs
             inputs['parent_folder'] = self.inputs.parent_folder
@@ -279,7 +286,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
 
         param_d = self.ctx.diffusion_convergence_parameters_d
         # I will start checking when minimum no. of iterations are reached
-        if self.ctx.diffusion_counter >= param_d['min_ld_iterations']:
+        if self.ctx.diffusion_counter > param_d['min_ld_iterations']:
             # Since I am here, it means I need to check the last 3 calculations to
             # see whether I converged or need to run again:
             # Now let me see the pinball coefficients that I get and if they have converged
@@ -339,7 +346,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
             running = self.submit(LinDiffusionWorkChain, **inputs)
 
-            self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
+            self.report(f'launching LinDiffusionWorkChain<{running.pk}> to extend last MD run')
             
             return ToContext(workchains_lindiff=append_(running))
             
@@ -352,6 +359,13 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         else:
             self.report('maximum number of LinDiffusion convergence iterations exceeded')
 
-        self.out('msd_results', self.ctx.workchains_lindiff[-1].outputs.msd_results)
-        self.out('total_trajectory', self.ctx.workchains_lindiff[-1].outputs.total_trajectory)
-        self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)
+        if self.inputs.get('run_last_lindiffusion'):
+            try:
+                self.out('msd_results', self.ctx.workchains_lindiff[-1].outputs.msd_results)
+                self.out('total_trajectory', self.ctx.workchains_lindiff[-1].outputs.total_trajectory)
+                self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)
+            except (KeyError, exceptions.NotExistent):
+                self.report('the LinearDiffusion subworkchain that was going to extend the last MD run failed to generate msd results')
+                self.out('msd_results', self.ctx.workchains_lindiff[-2].outputs.msd_results)
+                self.out('total_trajectory', self.ctx.workchains_lindiff[-2].outputs.total_trajectory)
+                self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)

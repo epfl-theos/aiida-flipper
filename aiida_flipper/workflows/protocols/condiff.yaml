@@ -4,7 +4,7 @@ default_inputs:
     run_last_lindiffusion: False
     diffusion_convergence_parameters:
         'max_ld_iterations': 5 
-        'min_ld_iterations': 3
+        'min_ld_iterations': 2
         'coefficient_threshold_std': 0.5 # 1st fit could be very different
         'coefficient_threshold_diff': 0.15 # so we have this criterion
     metadata:
