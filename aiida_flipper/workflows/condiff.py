@@ -93,14 +93,13 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             qb = orm.QueryBuilder()
             qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
             qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
-            self.ctx.workchains_fitting = qb.all(flat=True)
-            qb.append(WorkflowFactory('quantumespresso.flipper.convergediffusion'), with_outgoing='fit', tag='cond')
+            qb.append(orm.StructureData, with_outgoing='fit', tag='structure')
             # I look for all fit and lindiff wcs that led to this coefficient
-            if qb.count() > 0:
-                qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_incoming='cond', tag='fit2')
-                self.ctx.workchains_fitting = list(set(qb.all(flat=True)))
-                qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='cond', tag='lin2')
-                self.ctx.workchains_lindiff = list(set(qb.all(flat=True)))
+            qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_incoming='structure', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]}, tag='fit2')
+            self.ctx.workchains_fitting = list(set(qb.all(flat=True)))
+            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='structure', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]}, tag='lin2')
+            self.ctx.workchains_lindiff = list(set(qb.all(flat=True)))
+
             self.ctx.diffusion_counter += len(self.ctx.workchains_fitting)
 
     @classmethod
@@ -203,6 +202,12 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         Runs a LinDiffusionWorkChain for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
+        ## At the end of each iteration there must be one extra fitting workchain
+        ## So to ensure that workchains appended from input coefficients are in correct order
+        ## I check their lengths
+        if len(self.ctx.workchains_lindiff) == len(self.ctx.workchains_fitting):
+            return
+
         inputs = self.ctx.lindiff_inputs
         inputs['parent_folder'] = self.inputs.parent_folder
         # I always use the original structure to start a new LinDiffusionWorkChain
