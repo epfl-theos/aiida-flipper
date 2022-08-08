@@ -100,6 +100,9 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='structure', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]}, tag='lin2')
             self.ctx.workchains_lindiff = list(set(qb.all(flat=True)))
 
+            self.report(f'FittingWorkChains {[wc.id for wc in self.ctx.workchains_fitting]} which are ancestor to the coefficients <{self.ctx.lindiff_inputs.coefficients.pk}> will be considered in convergence logic')
+            self.report(f'LinDiffusionWorkChains {[wc.id for wc in self.ctx.workchains_lindiff]} which are ancestor to the coefficients <{self.ctx.lindiff_inputs.coefficients.pk}> will be considered in convergence logic')
+
             self.ctx.diffusion_counter += len(self.ctx.workchains_fitting)
 
     @classmethod
@@ -147,6 +150,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         builder.structure = structure
         builder.parent_folder = parent_folder
         builder.first_fit_with_random_rattling = orm.Bool(inputs['first_fit_with_random_rattling'])
+        builder.run_last_lindiffusion = orm.Bool(inputs['run_last_lindiffusion'])
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.diffusion_convergence_parameters = orm.Dict(dict=inputs['diffusion_convergence_parameters'])
 
@@ -205,7 +209,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         ## At the end of each iteration there must be one extra fitting workchain
         ## So to ensure that workchains appended from input coefficients are in correct order
         ## I check their lengths
-        if len(self.ctx.workchains_lindiff) == len(self.ctx.workchains_fitting):
+        if self.inputs.get('first_fit_with_random_rattling') and len(self.ctx.workchains_lindiff) == len(self.ctx.workchains_fitting):
             return
 
         inputs = self.ctx.lindiff_inputs
@@ -334,7 +338,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
                     
             inputs['structure'] = self.ctx.current_structure
             # I double the length of simulation here
-            inputs.md['nstep'] *= 1.5
+            inputs.md['nstep'] = orm.Int(1.5 * inputs.md['nstep'])
             inputs.msd_parameters['t_end_fit_fs_length'] *= 1.5
             # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
             
