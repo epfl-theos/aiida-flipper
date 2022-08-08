@@ -354,7 +354,12 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         if qb.count():
             cc, = qb.first()
             struct = cc.inputs['structure']
-            if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+            if struct.pk != self.ctx.inputs.structure.pk: 
+                self.report(f'Structure <{struct.pk}> of previous trajectory <{hustler_snapshots.id}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory,')
+                if struct.get_formula() == self.ctx.inputs.structure.get_formula():
+                    self.report(f'but their formulae are same, so proceeding with it, but please have a look.')
+                else:
+                    raise Exception('and their formulae are also different, so stopping now.')
         else:
             self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
             qb = orm.QueryBuilder()
