@@ -76,6 +76,9 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.converged = False
         self.ctx.current_structure = self.inputs.structure
 
+        # I make empty lists of workchains for comparison
+        self.ctx.workchains_fitting, self.ctx.workchains_lindiff = [], []
+
         # I store input dictionaries in context variables
         self.ctx.diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
 
@@ -274,7 +277,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
     def inspect_process(self):
         """Inspect the results of the last `LinDiffusionWorkChain` and `FittingWorkChain`.
 
-        I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
+        I check if pinball hyperparameters converged with respect to the provided threshold, 
+        both relative and absolute.
         """
         # I don't need to check much, since the daughter workchains take care of themselves
         try:
@@ -335,10 +339,10 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs['parent_folder'] = self.inputs.parent_folder
 
             # I use the last estimated Pinball parameters along with the last output trajectory
-                    
+            last_traj = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
             inputs['structure'] = self.ctx.current_structure
-            # I double the length of simulation here
-            inputs.md['nstep'] = orm.Int(1.5 * inputs.md['nstep'])
+            # I increase the length of previous run by 50%
+            inputs.md['nstep'] = orm.Int(1.5 * (last_traj.get_array('steps').size - 1) * self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['iprint'])
             inputs.msd_parameters['t_end_fit_fs_length'] *= 1.5
             # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
             
@@ -346,7 +350,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
 
             # Starting from previous trajectory
-            inputs.md.previous_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
+            inputs.md.previous_trajectory = last_traj
             
             # Set the `CALL` link label
             self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
