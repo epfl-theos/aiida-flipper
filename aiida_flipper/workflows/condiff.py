@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Mother Workchain that calls LinDiffusionWorkChain and FittingWorkChain to run MD simulations using 
 Pinball pw.x. based on Quantum ESPRESSO and fit pinball hyperparameters resepectively"""
+from functools import reduce
 import numpy as np
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
@@ -75,6 +76,11 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.diffusion_counter = 0
         self.ctx.converged = False
         self.ctx.current_structure = self.inputs.structure
+        try:
+            original_unitcell = orm.load_node(self.ctx.current_structure.extras['original_unitcell'])
+            self.report(f'Starting workchain on Structure {original_unitcell.get_formula()} (pk: <{self.ctx.current_structure.id}>)')
+        except:
+            self.report(f'Starting workchain on Structure {self.ctx.current_structure.get_formula()} (pk: <{self.ctx.current_structure.id}>)')
 
         # I make empty lists of workchains for comparison
         self.ctx.workchains_fitting, self.ctx.workchains_lindiff = [], []
