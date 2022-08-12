@@ -337,9 +337,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         """
 
         if not self.ctx.inputs.parameters['CONTROL']['calculation'] == 'md':
-            return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS
-        if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
-            raise NotImplementedError('Non-pinball MD is not implemented yet.')
+            return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS 
         if self.inputs.get('is_hustler', False):
             raise NotImplementedError('Please run hustler workchain.')
 
@@ -421,6 +419,13 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             # Even if the previous trajectory is longer than the required nsteps, I don't care, 
             # mdsteps_todo will be -ve in that case and the replaymdwc will not be launched
             self.ctx.mdsteps_done += nsteps_of_previous_trajectory
+
+            if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
+                try:
+                    if self.ctx.previous_trajectory.get_array('steps').size > 1:
+                        raise Exception(f'The trajectory <{self.ctx.previous_trajectory.id}> provided for thermalisation is too long')
+                except (KeyError, exceptions.NotExistent):
+                    raise RuntimeError('No trajectory found for thermalisation, aborting now')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.

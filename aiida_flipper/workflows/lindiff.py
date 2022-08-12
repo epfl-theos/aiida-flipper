@@ -83,7 +83,10 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         # MSD dict cannot contain items not recognised by SAMOS
         self.ctx.t_fit_fraction = self.ctx.msd_parameters_d.pop('t_fit_fraction')
-        
+        # If AIMD is launched
+        if not self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
+            self.report('Launching ab initio MD runs.')
+
         # I load the pinball hyper parameters here
         # change how its loaded depending on 3 coefficients or 4
         if self.inputs.get('coefficients'):
@@ -95,7 +98,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
             self.report(f'launching WorkChain with pinball coefficients defined by <{self.inputs.coefficients.pk}>')
-        else: self.report(f'launching WorkChain without any pinball hyperparameters')
+        elif self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False): 
+            self.report(f'launching WorkChain without any pinball hyperparameters')
 
     @classmethod
     def get_protocol_filepath(cls):
