@@ -55,9 +55,9 @@ protocols:
             'max_md_iterations': 1
             'sem_relative_threshold': 0.25
         msd_parameters:
-            'equilibration_time_fs': 9.e+4
+            'equilibration_time_fs': 6.e+4
             't_start_fit_fs' : 2.e+4 # 20 ps
-            't_end_fit_fs_length' : 1.e+5 # 100ps
-            't_fit_fraction' : 0.75 
+            't_end_fit_fs_length' : 7.e+4 # 70ps
+            't_fit_fraction' : 0.7
         md:
-            nstep: 7.e+5 # 0.7 ns
+            nstep: 5.e+5 # 0.5 ns
