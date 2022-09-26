@@ -13,9 +13,21 @@ from aiida_quantumespresso.common.types import ElectronicType
 from aiida.common.datastructures import StashMode
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 
-def make_supercell(structure, distance):
+def make_supercell_distance(structure, distance):
     from supercellor import supercell as sc
     pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0, do_niggli_first=False)[0]
+    sc_struct = orm.StructureData()
+    sc_struct.set_extra('original_unitcell', structure.uuid)
+    sc_struct.set_pymatgen(pym_sc_struct)
+    return sc_struct
+
+def make_supercell_size(structure, distance, size):
+    from supercellor import supercell as sc
+    epsilon = 0.1
+    pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0, do_niggli_first=False)[0]
+    while len(pym_sc_struct.sites) < size:
+        distance += epsilon
+        pym_sc_struct = sc.make_supercell(structure.get_pymatgen_structure(), distance, verbosity=0, do_niggli_first=False)[0]
     sc_struct = orm.StructureData()
     sc_struct.set_extra('original_unitcell', structure.uuid)
     sc_struct.set_pymatgen(pym_sc_struct)
@@ -83,6 +95,8 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
         spec.input('distance', valid_type=orm.Float,
             help='The minimum image distance as a float, the cell created will not have any periodic image below this distance.')
+        spec.input('supercell_size', valid_type=orm.Int,
+            help='The minimum no. of atoms in the supercell as an integer, the cell created will be at least this big.')
         spec.input('element_to_remove', valid_type=orm.Str,
             help='The element that will become the pinball, typically Lithium.')
         spec.input('stash_directory', valid_type=orm.Str, required=False,
@@ -109,7 +123,9 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
     def supercell(self):
         # Create the supercells and store the pinball/flipper structure and delithiated structure in a dictionary
         if self.inputs.distance == 0: sc_struct = self.inputs.structure
-        else: sc_struct = make_supercell(self.inputs.structure, self.inputs.distance)
+        elif self.inputs.supercell_size > 0:
+            sc_struct = make_supercell_size(self.inputs.structure, self.inputs.distance, self.inputs.supercell_size)
+        else: sc_struct = make_supercell_distance(self.inputs.structure, self.inputs.distance)
         self.ctx.supercell = delithiate_structure(sc_struct, self.inputs.element_to_remove)
 
     def setup(self):
@@ -132,7 +148,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
     @classmethod
     def get_builder_from_protocol(
-        cls, code, structure, protocol=None, overrides=None, distance=0, element_to_remove=None, stash_directory=None, **kwargs
+        cls, code, structure, protocol=None, overrides=None, distance=0, supercell_size=0, element_to_remove=None, stash_directory=None, **kwargs
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
@@ -155,8 +171,13 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         if stash_directory: stash = stash_directory
         else: stash = orm.Str(inputs['stash_directory'])
 
+        # I dont make supercell if distance is 0
         if distance == 0: sc_struct = structure
-        else: sc_struct = make_supercell(structure, distance)
+        # I make the supercell based on no. of atoms 
+        elif supercell_size > 0:
+            sc_struct = make_supercell_size(structure, distance, supercell_size)
+        # I make supercell based on periodic image
+        else: sc_struct = make_supercell_distance(structure, distance)
         supercell = delithiate_structure(sc_struct, element)
 
         PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
@@ -195,6 +216,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         builder.structure = structure
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.distance = orm.Float(distance)
+        builder.supercell_size = orm.Int(supercell_size)
         builder.element_to_remove = orm.Str(element)
 
         return builder
