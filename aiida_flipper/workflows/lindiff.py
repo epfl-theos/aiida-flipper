@@ -183,6 +183,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         """Run the `ReplayMDWorkChain` to launch a `FlipperCalculation`."""
 
         inputs = self.ctx.replay_inputs
+        # if self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
         inputs.pw['parent_folder'] = self.inputs.parent_folder
 
         if (self.ctx.replay_counter == 0):

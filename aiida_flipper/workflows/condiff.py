@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Mother Workchain that calls LinDiffusionWorkChain and FittingWorkChain to run MD simulations using 
 Pinball pw.x. based on Quantum ESPRESSO and fit pinball hyperparameters resepectively"""
-from functools import reduce
 import numpy as np
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
@@ -348,8 +347,9 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             last_traj = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
             inputs['structure'] = self.ctx.current_structure
             # I increase the length of previous run by 50%
-            inputs.md['nstep'] = orm.Int(1.5 * (last_traj.get_array('steps').size - 1) * self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['iprint'])
+            inputs.md['nstep'] = orm.Int(2 * (last_traj.get_array('steps').size - 1) * self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['iprint'])
             inputs.msd_parameters['t_end_fit_fs_length'] *= 1.5
+            inputs.msd_parameters['t_fit_fraction'] /= 1.5
             # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
             
             # Updating the pinball hyperparameters

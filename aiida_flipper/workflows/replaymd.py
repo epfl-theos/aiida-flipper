@@ -420,12 +420,12 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             # mdsteps_todo will be -ve in that case and the replaymdwc will not be launched
             self.ctx.mdsteps_done += nsteps_of_previous_trajectory
 
-            if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
-                try:
-                    if self.ctx.previous_trajectory.get_array('steps').size > 1:
-                        raise Exception(f'The trajectory <{self.ctx.previous_trajectory.id}> provided for thermalisation is too long')
-                except (KeyError, exceptions.NotExistent):
-                    raise RuntimeError('No trajectory found for thermalisation, aborting now')
+            # if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
+            #     try:
+            #         if self.ctx.previous_trajectory.get_array('steps').size > 1:
+            #             raise Exception(f'The trajectory <{self.ctx.previous_trajectory.id}> provided for thermalisation is too long')
+            #     except (KeyError, exceptions.NotExistent):
+            #         raise RuntimeError('No trajectory found for thermalisation, aborting now')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
