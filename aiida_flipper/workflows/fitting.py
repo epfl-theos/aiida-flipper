@@ -106,8 +106,8 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         # validating whether the charge density is correct, better I validate here before the workchain is submitted
         qb = orm.QueryBuilder()
         # querying the original unitcell
-        qb.append(orm.StructureData, filters={'uuid':{'==':structure.extras['original_unitcell']}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        qb.append(orm.StructureData, filters={'uuid':{'==':structure.uuid}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_outgoing='struct', tag='prepro')
         qb.append(orm.RemoteData, with_incoming='prepro', project='id')
         parent_folders = qb.all(flat=True)
         if not parent_folder.pk in parent_folders:
