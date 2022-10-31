@@ -137,7 +137,6 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
         self.ctx.preprocess_inputs.pw.settings = self.ctx.preprocess_inputs.pw.settings.get_dict()
         if not self.ctx.preprocess_inputs.pw.settings['gamma_only']: 
             return self.exit_codes.ERROR_KPOINTS_NOT_SPECIFIED
-        self.ctx.max_wallclock_seconds = self.ctx.preprocess_inputs.pw['metadata']['options']['max_wallclock_seconds']
         
     @classmethod
     def get_protocol_filepath(cls):
@@ -243,18 +242,7 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
 
         if workchain.is_failed:
             self.report(f'Host Lattice scf failed with exit status {workchain.exit_status}')
-            # If the given time was too short I start another pwbase workchain with longer walltime
-            if workchain.exit_status == 401:
-                inputs = self.ctx.preprocess_inputs
-                inputs.pw['metadata']['options']['max_wallclock_seconds'] = int(self.ctx.max_wallclock_seconds * 10)
-                inputs.pw['metadata']['options'].pop('queue_name')
-                inputs.pw.structure = self.ctx.supercell['delithiated_structure']
-                inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
-                running = self.submit(PwBaseWorkChain, **inputs)
-                self.report(f'Launching PwBaseWorkChain{running.pk}> with longer walltime')
-                return ToContext(add_node=running)
-            else:
-                return self.exit_codes.ERROR_SCF_FAILED
+            return self.exit_codes.ERROR_SCF_FAILED
 
     def result(self):
         
@@ -266,7 +254,5 @@ class PreProcessWorkChain(ProtocolMixin, WorkChain):
             self.report(f'Host Lattice scf finished with exit status {workchain.exit_status}, but stashed directories not found.')
             return self.exit_codes.ERROR_SCF_FINISHED_WITH_ERROR
 
-        if self.inputs.distance == 0: 
-            self.out('pinball_supercell', self.inputs.structure)
-        else: self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
+        self.out('pinball_supercell', self.ctx.supercell['pinball_structure'])
         self.out('host_lattice_scf_output', self.ctx.stashed_data)
