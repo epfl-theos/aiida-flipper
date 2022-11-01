@@ -255,7 +255,7 @@ class FlipperParser(PwParser):
         try:
             velocities = get_coords_from_file(vel_file, POS_BLOCK_REGEX, POS_REGEX_3)
         except ValueError:
-            velocities = get_coords_from_file_slow_and_steady(
+            velocities, exit_code = get_coords_from_file_slow_and_steady(
                 vel_file,
                 3,
                 raise_if_nan_in_values,
@@ -267,6 +267,15 @@ class FlipperParser(PwParser):
                 return exit_code
 
         #################################### CHECK ARRAYS ###########################################
+        
+        # I take an inelegant/hacky approach to make eveything the same size
+        n = min(len(scalar_quantities), len(convergence), len(positions), len(velocities), len(forces))
+        scalar_quantities = scalar_quantities[:n]
+        convergence = convergence[:n]
+        positions = positions[:n]
+        velocities = velocities[:n]
+        forces = forces[:n]
+        
         nstep_set = set()
         nat_set = set()
 
@@ -437,5 +446,8 @@ def get_coords_from_file_slow_and_steady(
         trajectory.append(timestep)
     timestep_length_set = set([len(timestep) for timestep in trajectory])
     if len(timestep_length_set) > 1:
-        return None, exit_code_dimension_1
+        del trajectory[-1]
+        timestep_length_set = set([len(timestep) for timestep in trajectory])
+        if len(timestep_length_set) > 1:
+            return None, exit_code_dimension_1
     return np.array(trajectory, dtype=np.float64), False

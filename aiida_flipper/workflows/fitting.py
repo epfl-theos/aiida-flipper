@@ -106,16 +106,15 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
         # validating whether the charge density is correct, better I validate here before the workchain is submitted
         qb = orm.QueryBuilder()
         # querying the original unitcell
-        qb.append(orm.StructureData, filters={'uuid':{'==':structure.extras['original_unitcell']}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        qb.append(orm.StructureData, filters={'uuid':{'==':structure.uuid}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_outgoing='struct', tag='prepro')
         qb.append(orm.RemoteData, with_incoming='prepro', project='id')
         parent_folders = qb.all(flat=True)
         if not parent_folder.pk in parent_folders:
             print(f'the charge densities <{parent_folder.pk}> do not match with structure {structure.pk}')
             print('Proceed at your own risk')
 
-        args = (code, structure, parent_folder, protocol)
-        replay = ReplayMDHWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
+        replay = ReplayMDHWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
         replay.pop('clean_workdir', None)
@@ -131,6 +130,7 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             replay['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
             replay['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
             replay['pw']['metadata']['options']['resources']['num_cores'] = 32
+            replay['pw']['metadata']['options']['resources']['memory_Mb'] = 50000
         
         builder = cls.get_builder()
         builder.md = replay
@@ -224,14 +224,16 @@ class FittingWorkChain(ProtocolMixin, WorkChain):
             shape = traj.get_positions().shape
             # I should remove the first step before comparing
             if shape[0] != nstep:
-                self.report('Wrong shape of array returned by {} ({} vs {})'.format(traj.pk, shape, nstep))
+                self.report(f'Wrong shape of array returned by {traj.pk} ({shape} vs {nstep})')
                 # self.exit_codes.ERROR_FITTING_FAILED
-
-        self.ctx.coefficients = get_pinball_factors(trajectory_dft, trajectory_pb)['coefficients']
         self.ctx.trajectory_pb = trajectory_pb
-        self.ctx.trajectory_dft = trajectory_dft
-        
-        return
+        self.ctx.trajectory_dft = trajectory_dft        
+        try:
+            self.ctx.coefficients = get_pinball_factors(trajectory_dft, trajectory_pb)['coefficients']
+            return
+        except:
+            self.report('the Fitting subworkchain failed to generate coefficients')
+            return self.exit_codes.ERROR_FITTING_FAILED
 
     def results(self):
         """Output the pinball hyperparameter and results of the fit along with the trajectories."""

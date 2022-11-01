@@ -1,7 +1,8 @@
 default_inputs:
     clean_workdir: False
     fitting_parameters:
-        forces_to_fit: 1.e+4
+        forces_to_fit: 5.e+3
+        stddev: 0.1
     metadata:
         label: 'replayh_'
     md:

@@ -99,7 +99,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         # yapf: disable
         # NOTE: input, outputs, and exit_codes are inherited from PwBaseWorkChain
         super().define(spec)
-        spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
+        spec.expose_inputs(HustlerCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
         spec.inputs['pw']['parent_folder'].required = True
@@ -159,7 +159,10 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         """
         super().setup()
         #self.ctx.restart_calc = None
-        #self.ctx.inputs = AttributeDict(self.exposed_inputs(PwCalculation, 'pw'))
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(HustlerCalculation, 'pw'))
+        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
+        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
+
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
@@ -176,7 +179,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         cls,
         code,
         structure,
-        stash_directory,
+        parent_folder,
         hustler_snapshots=None,
         nstep=None,
         protocol=None,
@@ -192,7 +195,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
-        :param stash_directory: the location of charge densities of host lattice
+        :param parent_folder: the location of charge densities of host lattice
         :param hustler_snapshots: a trajectory file typically the output of a/multiple flipper calculation(s) from which I shall extract `nstep` configurations
         :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces shall be evaluated
         :param protocol: protocol to use, if not specified, the default will be used.
@@ -265,6 +268,8 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         builder = cls.get_builder()
         builder.pw['code'] = code
         builder.pw['pseudos'] = pseudo_family.get_pseudos(structure=structure)
+        # removing the default Li pseudopotential so that user can provide the correct one 
+        builder.pw['pseudos'].pop('Li')
         builder.pw['structure'] = structure
         builder.pw['parameters'] = orm.Dict(dict=parameters)
         builder.pw['metadata'] = inputs['pw']['metadata']
@@ -281,7 +286,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             else: 
                 raise NotImplementedError('Only gamma k-points possible in hustler calculations.')
 
-        builder['pw']['parent_folder'] = stash_directory
+        builder['pw']['parent_folder'] = parent_folder
         if nstep: builder['nstep'] = nstep
         else: builder['nstep'] = orm.Int(inputs['nstep'])
 
@@ -294,8 +299,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         Also define dictionary `inputs` in the context, that will contain the inputs for the calculation that will be
         launched in the `run_calculation` step.
         """
-        #super().validate_parameters()
-        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
 
         if not self.ctx.inputs.parameters['CONTROL']['calculation'] == 'md':
             return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS
@@ -314,8 +317,6 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
             nstep = inp_nstep.value
         self.ctx.mdsteps_todo = nstep
         self.ctx.nsteps = nstep
-
-        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
 
         # In the pinball, the parent folder contains the host-lattice charge density and is always given as input,
         # so this is done automatically during the setup:
@@ -353,7 +354,12 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         if qb.count():
             cc, = qb.first()
             struct = cc.inputs['structure']
-            if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
+            if struct.pk != self.ctx.inputs.structure.pk: 
+                self.report(f'Structure <{struct.pk}> of previous trajectory <{hustler_snapshots.id}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory,')
+                if struct.get_formula() == self.ctx.inputs.structure.get_formula():
+                    self.report(f'but their formulae are same, so proceeding with it, but please have a look.')
+                else:
+                    raise Exception('and their formulae are also different, so stopping now.')
         else:
             self.report('WorkChain of previous trajectory not found, trying preceding calcfunction')
             qb = orm.QueryBuilder()

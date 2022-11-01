@@ -118,7 +118,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         # yapf: disable
         # NOTE: input, outputs, and exit_codes are inherited from PwBaseWorkChain
         super().define(spec)
-        spec.expose_inputs(PwCalculation, namespace='pw', exclude=('kpoints',))
+        spec.expose_inputs(FlipperCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
         spec.inputs['pw']['parent_folder'].required = True
@@ -190,7 +190,11 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         """
         super().setup()
         #self.ctx.restart_calc = None
-        #self.ctx.inputs = AttributeDict(self.exposed_inputs(PwCalculation, 'pw'))
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(FlipperCalculation, 'pw'))
+
+        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
+        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
+        
         self.ctx.inputs.pop('vdw_table', None)
         self.ctx.inputs.pop('hubbard_file', None)
         self.ctx.mdsteps_done = 0
@@ -207,7 +211,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         cls,
         code,
         structure,
-        stash_directory,
+        parent_folder,
         nstep=None,
         total_energy_max_fluctuation=None,
         previous_trajectory=None,
@@ -224,7 +228,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         Return a builder prepopulated with inputs selected according to the chosen protocol.
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
-        :param stash_directory: the location of charge densities of host lattice
+        :param parent_folder: the location of charge densities of host lattice
         :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces will be evaluated
         :param total_energy_max_fluctuation: If the total energy exceeeds this threshold I will stop the workchain
         :param previous_trajectory: if provided I will start the calculation from the positions and velocities of that trajectory
@@ -298,6 +302,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         builder = cls.get_builder()
         builder.pw['code'] = code
         builder.pw['pseudos'] = pseudo_family.get_pseudos(structure=structure)
+        # removing the default Li pseudopotential so that user can provide the correct one 
+        builder.pw['pseudos'].pop('Li')
         builder.pw['structure'] = structure
         builder.pw['parameters'] = orm.Dict(dict=parameters)
         builder.pw['metadata'] = inputs['pw']['metadata']
@@ -313,9 +319,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             else: 
                 raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
 
-        builder['pw']['parent_folder'] = stash_directory
-        if nstep: builder['nstep'] = nstep
-        else: builder['nstep'] = orm.Int(inputs['nstep'])
+        builder['pw']['parent_folder'] = parent_folder
+        builder['nstep'] = orm.Int(inputs['nstep'])
         if total_energy_max_fluctuation: 
             builder['total_energy_max_fluctuation'] = total_energy_max_fluctuation
         else: 
@@ -330,13 +335,9 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         Also define dictionary `inputs` in the context, that will contain the inputs for the calculation that will be
         launched in the `run_calculation` step.
         """
-        #super().validate_parameters()
-        self.ctx.inputs.parameters = self.ctx.inputs.parameters.get_dict()
 
         if not self.ctx.inputs.parameters['CONTROL']['calculation'] == 'md':
-            return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS
-        if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
-            raise NotImplementedError('Non-pinball MD is not implemented yet.')
+            return self.exit_codes.ERROR_INVALID_INPUT_MD_PARAMETERS 
         if self.inputs.get('is_hustler', False):
             raise NotImplementedError('Please run hustler workchain.')
 
@@ -351,8 +352,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         elif inp_nstep:
             nstep = inp_nstep.value
         self.ctx.mdsteps_todo = nstep
-
-        self.ctx.inputs.settings = self.ctx.inputs.settings.get_dict() if 'settings' in self.ctx.inputs else {}
 
         # In the pinball, the parent folder contains the host-lattice charge density and is always given as input,
         # so this is done automatically during the setup:
@@ -385,8 +384,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         # If trajectory is provided, check that the parameters are same across the 2 MD runs
         if self.inputs.get('previous_trajectory'):
-            self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
 
+            self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
             qb = orm.QueryBuilder()
             qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
             qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj')
@@ -412,7 +411,21 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                     if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
                     if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
                 else:
-                    self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')                    
+                    self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')     
+                   
+            # I update the mdsteps_todo here
+            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
+            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
+            # Even if the previous trajectory is longer than the required nsteps, I don't care, 
+            # mdsteps_todo will be -ve in that case and the replaymdwc will not be launched
+            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
+
+            # if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
+            #     try:
+            #         if self.ctx.previous_trajectory.get_array('steps').size > 1:
+            #             raise Exception(f'The trajectory <{self.ctx.previous_trajectory.id}> provided for thermalisation is too long')
+            #     except (KeyError, exceptions.NotExistent):
+            #         raise RuntimeError('No trajectory found for thermalisation, aborting now')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -513,9 +526,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
 
-            nsteps_of_previous_trajectory = self.ctx.inputs.parameters['CONTROL']['iprint'] * (self.ctx.previous_trajectory.attributes['array|positions'][0] - 1)
-            self.ctx.mdsteps_todo -= nsteps_of_previous_trajectory
-            self.ctx.mdsteps_done += nsteps_of_previous_trajectory
             self.report(f'launching WorkChain from a previous trajectory <{self.ctx.previous_trajectory.pk}>')
         
         else:
@@ -640,18 +650,18 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         else:
             self.report('No trajectories were produced!')
 #            return self.exit_codes.ERROR_NO_TRAJECTORY_PRODUCED
+        try:
+            node = self.ctx.children[self.ctx.iteration - 1]
+            # We check the `is_finished` attribute of the work chain and not the successfulness of the last process
+            # because the error handlers in the last iteration can have qualified a "failed" process as satisfactory
+            # for the outcome of the work chain and so have marked it as `is_finished=True`.
+            if not self.ctx.is_finished and self.ctx.iteration >= self.inputs.max_iterations.value:
+                self.report(f'reached the maximum number of iterations {self.inputs.max_iterations.valu}: last ran {self.ctx.process_name}<{node.pk}>')
+                return self.exit_codes.ERROR_MAXIMUM_ITERATIONS_EXCEEDED  # pylint: disable=no-member
+        except AttributeError:
+            self.report(f'workchain did not run since a previous trajectory<{self.ctx.previous_trajectory}> already had the required number of nsteps')
 
-        node = self.ctx.children[self.ctx.iteration - 1]
-
-        # We check the `is_finished` attribute of the work chain and not the successfulness of the last process
-        # because the error handlers in the last iteration can have qualified a "failed" process as satisfactory
-        # for the outcome of the work chain and so have marked it as `is_finished=True`.
-        if not self.ctx.is_finished and self.ctx.iteration >= self.inputs.max_iterations.value:
-            self.report('reached the maximum number of iterations {}: last ran {}<{}>'.format(
-                self.inputs.max_iterations.value, self.ctx.process_name, node.pk))
-            return self.exit_codes.ERROR_MAXIMUM_ITERATIONS_EXCEEDED  # pylint: disable=no-member
-
-        self.report('work chain completed after {} iterations'.format(self.ctx.iteration))
+        self.report(f'work chain completed after {self.ctx.iteration} iterations')
 
     def _wrap_bare_dict_inputs(self, port_namespace, inputs):
         """Wrap bare dictionaries in `inputs` in a `Dict` node if dictated by the corresponding inputs portnamespace.

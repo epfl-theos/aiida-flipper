@@ -9,7 +9,7 @@ from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida.plugins import WorkflowFactory
 
-from aiida_flipper.calculations.functions.functions import get_structure_from_trajectory
+from aiida_flipper.calculations.functions.functions import get_structure_from_trajectory, rattle_randomly_structure
 from aiida_flipper.utils.utils import get_or_create_input_node
 
 LinDiffusionWorkChain = WorkflowFactory('quantumespresso.flipper.lindiffusion')
@@ -36,11 +36,14 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         spec.input('structure', valid_type=orm.StructureData, help='The input supercell structure.')
         spec.input('parent_folder', valid_type=orm.RemoteData, required=True,
             help='The stashed directory containing charge densities of host lattice.')
+        spec.input('first_fit_with_random_rattling', valid_type=orm.Bool, required=False, help='If true I do a first fit of pinball hyperparameters using randomly rattled positions of the input structure instead of using unity as parameters.')
+        spec.input('run_last_lindiffusion', valid_type=orm.Bool, required=False, help='If true I do an additional run of lindiffusion workchain by doubling the `nstep` and using the previous pinball hyperparameters.')
         spec.input('diffusion_convergence_parameters', valid_type=orm.Dict, required=False, help='The dictionary containing the parameters used to converge diffusion coefficient.')
         spec.input('clean_workdir', valid_type=orm.Bool, default=lambda: orm.Bool(False),
             help='If `True`, work directories of all called calculation will be cleaned at the end of execution.')
         spec.outline(
             cls.setup,
+            cls.run_first_fit,
             while_(cls.should_run_process)(
             cls.run_lindiff,
             cls.run_fit,
@@ -72,13 +75,21 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.diffusion_counter = 0
         self.ctx.converged = False
         self.ctx.current_structure = self.inputs.structure
+        try:
+            original_unitcell = orm.load_node(self.ctx.current_structure.extras['original_unitcell'])
+            self.report(f'Starting workchain on Structure {original_unitcell.get_formula()} (pk: <{self.ctx.current_structure.id}>)')
+        except:
+            self.report(f'Starting workchain on Structure {self.ctx.current_structure.get_formula()} (pk: <{self.ctx.current_structure.id}>)')
+
+        # I make empty lists of workchains for comparison
+        self.ctx.workchains_fitting, self.ctx.workchains_lindiff = [], []
 
         # I store input dictionaries in context variables
         self.ctx.diffusion_convergence_parameters_d = self.inputs.diffusion_convergence_parameters.get_dict()
 
         self.ctx.lindiff_inputs = AttributeDict(self.exposed_inputs(LinDiffusionWorkChain, namespace='ld'))
         self.ctx.fitting_inputs = AttributeDict(self.exposed_inputs(FittingWorkChain, namespace='ft'))
-        self.ctx.lindiff_inputs.md.pw.settings = self.ctx.lindiff_inputs.md.pw.settings.get_dict()
+        self.ctx.lindiff_inputs.md.pw.parameters = self.ctx.lindiff_inputs.md.pw.parameters.get_dict()
         # Without putting as a dict inside the namespace of lindiff, msd_parameters can't be updated later
         self.ctx.lindiff_inputs.msd_parameters = self.ctx.lindiff_inputs.msd_parameters.get_dict()
         self.ctx.lindiff_inputs.diffusion_parameters = self.ctx.lindiff_inputs.diffusion_parameters.get_dict()
@@ -86,15 +97,21 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         self.ctx.max_lindiff_iterations = self.ctx.lindiff_inputs.diffusion_parameters['max_md_iterations']
         if self.ctx.lindiff_inputs.get('coefficients'):
             self.report(f'I was given pinball coefficients <{self.ctx.lindiff_inputs.coefficients.pk}>')
-            self.ctx.diffusion_counter = 1
             # Adding the fitting and lindiff workchains that generated this pinball parameter 
             qb = orm.QueryBuilder()
             qb.append(orm.Dict, filters={'uuid':{'==':self.ctx.lindiff_inputs.coefficients.uuid}}, tag='coefs')
             qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_outgoing='coefs', tag='fit')
-            self.ctx.workchains_fitting = qb.all(flat=True)
-            qb.append(orm.TrajectoryData, with_outgoing='fit', tag='traj')
-            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_outgoing='traj', tag='lindiff')
-            self.ctx.workchains_lindiff = qb.all(flat=True)
+            qb.append(orm.StructureData, with_outgoing='fit', tag='structure')
+            # I look for all fit and lindiff wcs that led to this coefficient
+            qb.append(WorkflowFactory('quantumespresso.flipper.fitting'), with_incoming='structure', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]}, tag='fit2')
+            self.ctx.workchains_fitting = list(set(qb.all(flat=True)))
+            qb.append(WorkflowFactory('quantumespresso.flipper.lindiffusion'), with_incoming='structure', filters={'and':[{'attributes.process_state':{'==':'finished'}}, {'attributes.exit_status':{'==':0}}]}, tag='lin2')
+            self.ctx.workchains_lindiff = list(set(qb.all(flat=True)))
+
+            self.report(f'FittingWorkChains {[wc.id for wc in self.ctx.workchains_fitting]} which are ancestor to the coefficients <{self.ctx.lindiff_inputs.coefficients.pk}> will be considered in convergence logic')
+            self.report(f'LinDiffusionWorkChains {[wc.id for wc in self.ctx.workchains_lindiff]} which are ancestor to the coefficients <{self.ctx.lindiff_inputs.coefficients.pk}> will be considered in convergence logic')
+
+            self.ctx.diffusion_counter += len(self.ctx.workchains_fitting)
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -119,15 +136,16 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         """
         inputs = cls.get_protocol_inputs(protocol, overrides)
 
-        args = (code, structure, parent_folder, protocol)
-        lindiff = LinDiffusionWorkChain.get_builder_from_protocol(*args, overrides=inputs['ld'], **kwargs)
+        # I cannot use args = (code, structure, parent_folder, protocol) in get_builder_from_protocol(*args) since the 
+        # order of the variables is different in the  of LinDiffusionWorkChain
+
+        lindiff = LinDiffusionWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, overrides=inputs['ld'], **kwargs)
 
         lindiff.pop('structure', None)
         lindiff.pop('clean_workdir', None)
         lindiff.pop('parent_folder', None)
 
-        args = (code, structure, parent_folder, protocol)
-        fitting = FittingWorkChain.get_builder_from_protocol(*args, overrides=inputs['ft'], **kwargs)
+        fitting = FittingWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, overrides=inputs['ft'], **kwargs)
 
         fitting.pop('structure', None)
         fitting.pop('clean_workdir', None)
@@ -139,6 +157,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
 
         builder.structure = structure
         builder.parent_folder = parent_folder
+        builder.first_fit_with_random_rattling = orm.Bool(inputs['first_fit_with_random_rattling'])
+        builder.run_last_lindiffusion = orm.Bool(inputs['run_last_lindiffusion'])
         builder.clean_workdir = orm.Bool(inputs['clean_workdir'])
         builder.diffusion_convergence_parameters = orm.Dict(dict=inputs['diffusion_convergence_parameters'])
 
@@ -153,45 +173,74 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         elif (not(self.ctx.converged) and (self.ctx.diffusion_convergence_parameters_d['max_ld_iterations'] > self.ctx.diffusion_counter)): return True
         else: return False
 
+    def run_first_fit(self):
+        """
+        Runs a fitting workflow on positions generated from random rattling of input structure
+        """
+
+        if self.inputs.get('first_fit_with_random_rattling') and self.ctx.diffusion_counter==0:
+
+            inputs = self.ctx.fitting_inputs
+            inputs['parent_folder'] = self.inputs.parent_folder
+
+            inputs['structure'] = self.ctx.current_structure
+
+            timestep_in_fs = self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['dt'] * 0.02418884254 * self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['iprint']
+            forces_to_fit = inputs.fitting_parameters.get_dict()['forces_to_fit']
+            stddev = inputs.fitting_parameters.get_dict()['stddev']
+
+            pinballs = [s for s in self.ctx.current_structure.sites if s.kind_name == 'Li']
+            nr_of_configurations = int(forces_to_fit/(len(pinballs)*3)+1+1)
+            hustler_snapshots = rattle_randomly_structure(self.ctx.current_structure, orm.Dict(dict={'elements':'Li', 'stdev':stddev, 'nr_of_configurations':nr_of_configurations, 'timestep_in_fs':timestep_in_fs}))['rattled_snapshots']
+
+            inputs.md['hustler_snapshots'] = hustler_snapshots
+            
+            # Set the `CALL` link label
+            self.inputs.metadata.call_link_label = f'fitting_{self.ctx.diffusion_counter:02d}'
+            inputs.metadata.label = f'fitting_{self.ctx.diffusion_counter:02d}'
+
+            inputs = prepare_process_inputs(FittingWorkChain, inputs)
+            running = self.submit(FittingWorkChain, **inputs)
+
+            self.ctx.diffusion_counter +=1
+            self.report(f'launching FittingWorkChain<{running.pk}>')
+            
+            return ToContext(workchains_fitting=append_(running))
+
+        else: return
+
     def run_lindiff(self):
         """
         Runs a LinDiffusionWorkChain for an estimate of the diffusion.
         If there is a last fitting estimate, I update the parameters for the pinball.
         """
+        ## At the end of each iteration there must be one extra fitting workchain
+        ## So to ensure that workchains appended from input coefficients are in correct order
+        ## I check their lengths
+        if self.inputs.get('first_fit_with_random_rattling') and len(self.ctx.workchains_lindiff) == len(self.ctx.workchains_fitting):
+            return
+
         inputs = self.ctx.lindiff_inputs
         inputs['parent_folder'] = self.inputs.parent_folder
+        # I always use the original structure to start a new LinDiffusionWorkChain
+        inputs['structure'] = self.ctx.current_structure
 
-        if (self.ctx.diffusion_counter == 0):
-            # if this is first run, then I launch an unmodified LinDiffusionWorkChain
-            inputs['structure'] = self.ctx.current_structure
+        if (self.ctx.diffusion_counter == 1):
+            # If this is first run, then I launch an unmodified LinDiffusionWorkChain
             # Since this is a first run, I don't want to run for too long
             inputs.diffusion_parameters.update({'max_md_iterations': 1})
+            if self.inputs.get('first_fit_with_random_rattling'):
+                # I have yet to inspect the first fitting workchain, so I do it now
+                try:
+                    coefs = self.ctx.workchains_fitting[-1].outputs.coefficients
+                    inputs.coefficients = coefs
+                except (KeyError, exceptions.NotExistent):
+                    self.report('the Fitting subworkchain failed to generate coefficients')
+                    return self.exit_codes.ERROR_FITTING_FAILED
 
         else:
             # for every run after the first one, the pinball hyperparameters are taken from the output of the
-            # last fitting workchain, which used the output trajectory of previous MD run to do fitting
-
-            workchain = self.ctx.workchains_lindiff[-1]
-            create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
-            # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
-            kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
-                        parameters=get_or_create_input_node(orm.Dict, dict(
-                            step_index=-1,
-                            recenter=False,
-                            create_settings=True,
-                            complete_missing=create_missing), store=False),)
-            if create_missing:
-                kwargs['structure'] = self.ctx.current_structure
-                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.lindiff_inputs.md.pw.settings, store=False)
-
-            res = get_structure_from_trajectory(**kwargs)
-            
-            inputs['structure'] = res['structure']
-            self.ctx.current_structure = res['structure']
-            inputs.md['pw']['parameters']['IONS'].update({'ion_velocities': 'from_input'})
-            inputs.md['pw']['settings'] = res['settings'].get_dict()
-            # Since I start from previous trajectory, it has sufficiently equilibriated 
-            inputs.msd_parameters.update({'equilibration_time_fs': 0})
+            # last fitting workchain, which used the output trajectory of previous MD run to do fitting       
             # I need to use the input value for every run after first one
             inputs.diffusion_parameters.update({'max_md_iterations': self.ctx.max_lindiff_iterations})
             # Updating the pinball hyperparameters
@@ -233,7 +282,8 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
     def inspect_process(self):
         """Inspect the results of the last `LinDiffusionWorkChain` and `FittingWorkChain`.
 
-        I compute the MSD from the previous trajectory and check if it converged with respect to the provided threshold, both relative and absolute.
+        I check if pinball hyperparameters converged with respect to the provided threshold, 
+        both relative and absolute.
         """
         # I don't need to check much, since the daughter workchains take care of themselves
         try:
@@ -254,7 +304,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
 
         param_d = self.ctx.diffusion_convergence_parameters_d
         # I will start checking when minimum no. of iterations are reached
-        if self.ctx.diffusion_counter >= param_d['min_ld_iterations']:
+        if self.ctx.diffusion_counter > param_d['min_ld_iterations']:
             # Since I am here, it means I need to check the last 3 calculations to
             # see whether I converged or need to run again:
             # Now let me see the pinball coefficients that I get and if they have converged
@@ -288,32 +338,38 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         Runs a final LinDiffusionWorkChain after converging Pinball parameters, starting from the previous trajectory.
         This is the MD run that to be used for all post processing.
         """
-        inputs = self.ctx.lindiff_inputs
-        inputs['parent_folder'] = self.inputs.parent_folder
+        if self.inputs.get('run_last_lindiffusion'):
 
-        # I use the last estimated Pinball parameters along with the last output trajectory
-                
-        inputs['structure'] = self.ctx.current_structure
-        # I double the length of simulation here
-        inputs.md['nstep'] *= 2
-        # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
-        
-        # Updating the pinball hyperparameters
-        inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
+            inputs = self.ctx.lindiff_inputs
+            inputs['parent_folder'] = self.inputs.parent_folder
 
-        # Starting from previous trajectory
-        inputs.md.previous_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
-        
-        # Set the `CALL` link label
-        self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
-        inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+            # I use the last estimated Pinball parameters along with the last output trajectory
+            last_traj = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
+            inputs['structure'] = self.ctx.current_structure
+            # I increase the length of previous run by 50%
+            inputs.md['nstep'] = orm.Int(2 * (last_traj.get_array('steps').size - 1) * self.ctx.lindiff_inputs.md.pw.parameters['CONTROL']['iprint'])
+            inputs.msd_parameters['t_end_fit_fs_length'] *= 1.5
+            inputs.msd_parameters['t_fit_fraction'] /= 1.5
+            # No need to change other parameters, as they are still the same as the previous LinDiffusinWorkChain 
+            
+            # Updating the pinball hyperparameters
+            inputs.coefficients = self.ctx.workchains_fitting[-2].outputs.coefficients
 
-        inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
-        running = self.submit(LinDiffusionWorkChain, **inputs)
+            # Starting from previous trajectory
+            inputs.md.previous_trajectory = last_traj
+            
+            # Set the `CALL` link label
+            self.inputs.metadata.call_link_label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
+            inputs.metadata.label = f'lindiffusion_{self.ctx.diffusion_counter:02d}'
 
-        self.report(f'launching LinDiffusionWorkChain<{running.pk}>')
-        
-        return ToContext(workchains_lindiff=append_(running))
+            inputs = prepare_process_inputs(LinDiffusionWorkChain, inputs)
+            running = self.submit(LinDiffusionWorkChain, **inputs)
+
+            self.report(f'launching LinDiffusionWorkChain<{running.pk}> to extend last MD run')
+            
+            return ToContext(workchains_lindiff=append_(running))
+            
+        else: return
 
     def results(self):
         """Retrun the output trajectory and diffusion coefficients generated in the last MD run."""
@@ -322,6 +378,13 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         else:
             self.report('maximum number of LinDiffusion convergence iterations exceeded')
 
-        self.out('msd_results', self.ctx.workchains_lindiff[-1].outputs.msd_results)
-        self.out('total_trajectory', self.ctx.workchains_lindiff[-1].outputs.total_trajectory)
-        self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)
+        if self.inputs.get('run_last_lindiffusion'):
+            try:
+                self.out('msd_results', self.ctx.workchains_lindiff[-1].outputs.msd_results)
+                self.out('total_trajectory', self.ctx.workchains_lindiff[-1].outputs.total_trajectory)
+                self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)
+            except (KeyError, exceptions.NotExistent):
+                self.report('the LinearDiffusion subworkchain that was going to extend the last MD run failed to generate msd results')
+                self.out('msd_results', self.ctx.workchains_lindiff[-2].outputs.msd_results)
+                self.out('total_trajectory', self.ctx.workchains_lindiff[-2].outputs.total_trajectory)
+                self.out('coefficients', self.ctx.workchains_fitting[-1].outputs.coefficients)

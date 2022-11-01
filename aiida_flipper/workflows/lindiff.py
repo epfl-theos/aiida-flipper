@@ -83,7 +83,10 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         # MSD dict cannot contain items not recognised by SAMOS
         self.ctx.t_fit_fraction = self.ctx.msd_parameters_d.pop('t_fit_fraction')
-        
+        # If AIMD is launched
+        if not self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
+            self.report('Launching ab initio MD runs.')
+
         # I load the pinball hyper parameters here
         # change how its loaded depending on 3 coefficients or 4
         if self.inputs.get('coefficients'):
@@ -95,7 +98,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_rigid_factor'] = coefs[2]
             self.ctx.replay_inputs.pw.parameters['SYSTEM']['flipper_ewald_pinball_factor'] = coefs[3]
             self.report(f'launching WorkChain with pinball coefficients defined by <{self.inputs.coefficients.pk}>')
-        else: self.report(f'launching WorkChain without any pinball hyperparameters')
+        elif self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False): 
+            self.report(f'launching WorkChain without any pinball hyperparameters')
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -126,16 +130,15 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # validating whether the charge density is correct, better I validate here before the workchain is submitted
         qb = orm.QueryBuilder()
         # querying the original unitcell
-        qb.append(orm.StructureData, filters={'uuid':{'==':structure.extras['original_unitcell']}}, tag='struct')
-        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_incoming='struct', tag='prepro')
+        qb.append(orm.StructureData, filters={'uuid':{'==':structure.uuid}}, tag='struct')
+        qb.append(WorkflowFactory('quantumespresso.flipper.preprocess'), with_outgoing='struct', tag='prepro')
         qb.append(orm.RemoteData, with_incoming='prepro', project='id')
         parent_folders = qb.all(flat=True)
         if not parent_folder.pk in parent_folders: 
             print(f'the charge densities <{parent_folder.pk}> do not match with structure <{structure.pk}>')
             print('Proceed at your own risk')
 
-        args = (code, structure, parent_folder, protocol)
-        replay = ReplayMDWorkChain.get_builder_from_protocol(*args, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
+        replay = ReplayMDWorkChain.get_builder_from_protocol(code=code, structure=structure, parent_folder=parent_folder, protocol=protocol, electronic_type=ElectronicType.INSULATOR, overrides=inputs['md'], **kwargs)
 
         replay['pw'].pop('structure', None)
         replay.pop('clean_workdir', None)
@@ -151,6 +154,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             replay['pw']['metadata']['options']['resources'].pop('num_cores_per_mpiproc')
             replay['pw']['metadata']['options']['resources'].pop('num_mpiprocs_per_machine')
             replay['pw']['metadata']['options']['resources']['num_cores'] = 32
+            replay['pw']['metadata']['options']['resources']['memory_Mb'] = 50000
 
         builder = cls.get_builder()
         builder.md = replay
@@ -179,6 +183,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         """Run the `ReplayMDWorkChain` to launch a `FlipperCalculation`."""
 
         inputs = self.ctx.replay_inputs
+        # if self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
         inputs.pw['parent_folder'] = self.inputs.parent_folder
 
         if (self.ctx.replay_counter == 0):

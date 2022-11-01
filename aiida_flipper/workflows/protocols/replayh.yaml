@@ -4,8 +4,8 @@ default_inputs:
         label: ''
     nstep: 51
     meta_parameters:
-        conv_thr_per_atom: 0.2e-9
-        etot_conv_thr_per_atom: 1.e-5
+        conv_thr_per_atom: 0.1e-9
+        etot_conv_thr_per_atom: 5.e-6
     pseudo_family: 'SSSP/1.1.2/PBEsol/efficiency'
     pw:
         settings:
@@ -26,8 +26,9 @@ default_inputs:
                 ldecompose_forces: True
                 ldecompose_ewald: True
                 flipper_do_nonloc: True
-                forc_conv_thr: 1.e-4
+                forc_conv_thr: 0.5e-4
                 tprnfor: True
+                verbosity: 'low'
             SYSTEM:
                 nosym: True
             ELECTRONS:
@@ -41,19 +42,19 @@ protocols:
     precise:
         description: 'Protocol to perform the computation at high precision at higher computational cost.'
         meta_parameters:
-            conv_thr_per_atom: 0.1e-9
-            etot_conv_thr_per_atom: 0.5e-5
+            conv_thr_per_atom: 0.05e-9
+            etot_conv_thr_per_atom: 0.1e-5
         pseudo_family: 'SSSP/1.1.2/PBEsol/precision'
         pw:
             parameters:
                 CONTROL:
-                    forc_conv_thr: 0.5e-4
+                    forc_conv_thr: 1.e-5
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
         meta_parameters:
-            conv_thr_per_atom: 0.4e-9
-            etot_conv_thr_per_atom: 1.e-4
+            conv_thr_per_atom: 0.2e-9
+            etot_conv_thr_per_atom: 1.e-5
         pw:
             parameters:
                 CONTROL:
-                    forc_conv_thr: 1.e-3
+                    forc_conv_thr: 1.e-4

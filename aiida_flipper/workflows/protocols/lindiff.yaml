@@ -4,7 +4,7 @@ default_inputs:
         'max_md_iterations': 3
         'min_md_iterations': 1
         'sem_threshold': 1.e-8
-        'sem_relative_threshold': 0.25
+        'sem_relative_threshold': 0.15
     msd_parameters:
         'equilibration_time_fs': 1.e+5
         'species_of_interest': ['Li']
@@ -14,7 +14,7 @@ default_inputs:
         't_start_fs' : 0
         't_start_fit_fs' : 2.5e+4 # 25 ps
         't_end_fit_fs' : 5.e+5 # this is automated, so just a dummy input now
-        't_end_fit_fs_length' : 1.2e+5 # (120ps) length by which t_end_fit_fs will be incremented
+        't_end_fit_fs_length' : 8.e+4 # (80ps) length by which t_end_fit_fs will be incremented
         't_fit_fraction' : 0.7 # fraction of output trajectory used for fitting
         'do_com' : False
         'decomposed' : False
@@ -22,7 +22,7 @@ default_inputs:
     metadata:
         label: 'replay_'
     md:
-        nstep: 1.e+6 # 1.ns
+        nstep: 5.e+5 # 0.5 ns
         pw:
             settings:
                 gamma_only: True
@@ -46,7 +46,18 @@ protocols:
         description: 'Protocol to perform the computation at normal precision at moderate computational cost.'
     precise:
         description: 'Protocol to perform the computation at high precision at higher computational cost.'
-        min_md_convergence_iterations: 5
+        diffusion_parameters:
+            'max_md_iterations': 5
+            'min_md_iterations': 2
     fast:
         description: 'Protocol to perform the computation at low precision at minimal computational cost for testing purposes.'
-        min_md_convergence_iterations: 1
+        diffusion_parameters:
+            'max_md_iterations': 1
+            'sem_relative_threshold': 0.25
+        msd_parameters:
+            'equilibration_time_fs': 6.e+4
+            't_start_fit_fs' : 2.e+4 # 20 ps
+            't_end_fit_fs_length' : 7.e+4 # 70ps
+            't_fit_fraction' : 0.7
+        md:
+            nstep: 5.e+5 # 0.5 ns
