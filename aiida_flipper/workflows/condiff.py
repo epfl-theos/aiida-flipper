@@ -265,7 +265,13 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         inputs['parent_folder'] = self.inputs.parent_folder
         # There's no difference between the first and subsequent runs so I don't change anything
         inputs['structure'] = self.ctx.current_structure
-        inputs.md['hustler_snapshots'] = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
+        # I have yet to inspect the previous lindiffusion workchain, so I do it now
+        try:
+            total_trajectory = self.ctx.workchains_lindiff[-1].outputs.total_trajectory
+            inputs.md['hustler_snapshots'] = total_trajectory
+        except (KeyError, exceptions.NotExistent):
+            self.report('the LinearDiffusion subworkchain failed to generate a trajectory')
+            return self.exit_codes.ERROR_LINDIFFUSION_FAILED
         
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = f'fitting_{self.ctx.diffusion_counter:02d}'
@@ -291,11 +297,6 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         except:
             species = 'Li'
 
-        try:
-            msd_results = self.ctx.workchains_lindiff[-1].outputs.msd_results
-        except (KeyError, exceptions.NotExistent):
-            self.report('the LinearDiffusion subworkchain failed to generate msd results')
-            return self.exit_codes.ERROR_LINDIFFUSION_FAILED
         try:
             coefs = self.ctx.workchains_fitting[-1].outputs.coefficients
         except (KeyError, exceptions.NotExistent):
