@@ -293,11 +293,6 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         """
         # I don't need to check much, since the daughter workchains take care of themselves
         try:
-            species = self.ctx.lindiff_inputs.msd_parameters['species_of_interest'][0]
-        except:
-            species = 'Li'
-
-        try:
             coefs = self.ctx.workchains_fitting[-1].outputs.coefficients
         except (KeyError, exceptions.NotExistent):
             self.report('the Fitting subworkchain failed to generate coefficients')
