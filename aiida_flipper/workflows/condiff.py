@@ -177,6 +177,7 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
         """
         Runs a fitting workflow on positions generated from random rattling of input structure
         """
+        self.ctx.diffusion_counter +=1
 
         if self.inputs.get('first_fit_with_random_rattling') and self.ctx.diffusion_counter==0:
 
@@ -202,7 +203,6 @@ class ConvergeDiffusionWorkChain(ProtocolMixin, WorkChain): # maybe BaseRestartW
             inputs = prepare_process_inputs(FittingWorkChain, inputs)
             running = self.submit(FittingWorkChain, **inputs)
 
-            self.ctx.diffusion_counter +=1
             self.report(f'launching FittingWorkChain<{running.pk}>')
             
             return ToContext(workchains_fitting=append_(running))
