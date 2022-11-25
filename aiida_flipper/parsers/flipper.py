@@ -140,6 +140,8 @@ class FlipperParser(PwParser):
         ########################## EVP FILE #################################
         with open(evp_file) as f:
             try:
+                # I put this variable here to check later if any indices need to be deleted
+                indices_to_delete = []
                 # Using np.genfromtxt instead of np.loadtxt, because this function
                 # gives NaN to a value it cannot read, and doesn't throw an error!
                 # reading the first 8 columns for verlet.evp
@@ -148,7 +150,9 @@ class FlipperParser(PwParser):
                 if scalar_quantities.shape[1] != 7:
                     return self.exit_codes.ERROR_INCOMMENSURATE_TRAJECTORY_DIMENSIONS_2
                 if raise_if_nan_in_values and np.isnan(scalar_quantities).any():
-                    return self.exit_codes.ERROR_TRAJECTORY_WITH_NAN
+                    for index, nan_rows in enumerate(np.isnan(scalar_quantities)):
+                        if nan_rows.any():
+                            indices_to_delete.append(index)
                 f.seek(0)
                 # reading the last column of the verlet.evp
                 try:
@@ -267,7 +271,14 @@ class FlipperParser(PwParser):
                 return exit_code
 
         #################################### CHECK ARRAYS ###########################################
-        
+        # If there are nan values in evp files I drop them from all arrays
+        if indices_to_delete:
+            scalar_quantities = np.delete(scalar_quantities, indices_to_delete, axis=0)
+            convergence = np.delete(convergence, indices_to_delete, axis=0)
+            positions = np.delete(positions, indices_to_delete, axis=0)
+            velocities = np.delete(velocities, indices_to_delete, axis=0)
+            forces = np.delete(forces, indices_to_delete, axis=0)
+
         # I take an inelegant/hacky approach to make eveything the same size
         n = min(len(scalar_quantities), len(convergence), len(positions), len(velocities), len(forces))
         scalar_quantities = scalar_quantities[:n]
