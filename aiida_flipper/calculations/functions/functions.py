@@ -373,3 +373,113 @@ def rattle_randomly_structure(structure, parameters):
     trajectory_data.set_attribute('units|velocities', 'atomic')
 
     return dict(rattled_snapshots=trajectory_data)
+
+@calcfunction
+def get_doped_structure(unitcell, doping_parameters):
+    """
+    Take the input structure and create a doped structures from it.
+    :param unitcell: the StructureData node
+    :param doping_parameters: DictionaryData instance that contains following keywords - 
+        extra_element_concentration - percent by which to increase Li concentration, a negative value
+        implies the percent of Li to remove
+        element - element to dope
+        r_cut - cutoff radius in Angstrom, to check how far newly added atoms should be
+        distance - periodic image distance in Angstrom, used to construct supercell
+        size - minimum no of atoms in the supercell
+    """
+
+    import random, math
+    import numpy as np
+    from pymatgen.core.periodic_table import Element, Species
+    from pymatgen.core.sites import PeriodicSite
+    from aiida_flipper.workflows.preprocess import make_supercell_size
+
+    assert isinstance(unitcell, orm.StructureData), f'input structure needs to be an instance of {orm.StructureData}'
+
+    if isinstance(doping_parameters, orm.Dict):
+        doping_parameters_d = doping_parameters.get_dict()
+    elif isinstance(doping_parameters, dict):
+        doping_parameters_d = doping_parameters.copy()
+    else:
+        raise TypeError('parameters type not valid')
+
+    extra_element_concentration = doping_parameters_d['extra_element_concentration']
+    assert extra_element_concentration != 0, 'input Li concentration needs to be non zero'
+
+    r_cut = doping_parameters_d['r_cut']
+    element = doping_parameters_d['element']
+    distance = doping_parameters_d['distance']
+    size = doping_parameters_d['size']
+
+    structure = make_supercell_size(unitcell, distance, size)
+
+    pinball_kinds = [kind for kind in structure.kinds if kind.symbol == element]
+
+    kindnames_to_delithiate = [kind.name for kind in pinball_kinds]
+
+    non_pinball_kinds = [k for i,k in enumerate(structure.kinds) if k.symbol != element]
+
+    non_pinball_sites = [s for s in structure.sites if s.kind_name not in kindnames_to_delithiate]
+
+    pinball_sites = [s for s in structure.sites if s.kind_name in kindnames_to_delithiate]
+
+    pinball_structure = orm.StructureData()
+
+    pinball_structure.set_cell(structure.cell)
+    pinball_structure.set_attribute('pinball_structure', True)
+    pinball_structure.set_attribute('doped_structure', True)
+    pinball_structure.set_extra('original_unitcell', unitcell.uuid)
+    pinball_structure.set_attribute('original_unitcell', unitcell.uuid)
+
+    if extra_element_concentration > 0:
+
+        Li_atoms_to_add = math.ceil(len(pinball_sites) * extra_element_concentration)
+
+        structure_pymatgen = structure.get_pymatgen()
+
+        a, b, c = structure_pymatgen.lattice.lengths
+        x = np.arange(0, a, 0.5)
+        y = np.arange(0, b, 0.5)
+        z = np.arange(0, c, 0.5)
+
+        for i in range(Li_atoms_to_add):
+            find_new_site = False
+            while not find_new_site:
+                site_location = np.array([random.choice(x), random.choice(y), random.choice(z)])
+                new_site = PeriodicSite(Element(element), site_location, structure_pymatgen.lattice, coords_are_cartesian=True)
+                count = 0
+                for site in structure_pymatgen:
+                    count += 1
+                    if site.distance(new_site) < r_cut:
+                        break
+                if count == structure_pymatgen.num_sites:
+                    find_new_site = True
+                    structure_pymatgen.append(Element(element), site_location, coords_are_cartesian=True)
+
+        temp_doped_structure = orm.StructureData()
+        temp_doped_structure.set_pymatgen(structure_pymatgen)
+        doped_pinball_sites = temp_doped_structure.sites[-Li_atoms_to_add:]
+
+        [pinball_structure.append_kind(_) for _ in pinball_kinds]
+        [pinball_structure.append_site(_) for _ in pinball_sites]
+        [pinball_structure.append_site(_) for _ in doped_pinball_sites]
+
+        [pinball_structure.append_kind(_) for _ in non_pinball_kinds]
+        [pinball_structure.append_site(_) for _ in non_pinball_sites]
+    
+    elif extra_element_concentration < 0:
+
+        Li_atoms_to_remove = math.ceil(len(pinball_sites) * -extra_element_concentration)
+
+        to_delete = set(random.sample(range(len(pinball_sites)), Li_atoms_to_remove))
+        doped_pinball_sites = [s for i, s in enumerate(pinball_sites) if not i in to_delete]
+
+        [pinball_structure.append_kind(_) for _ in pinball_kinds]
+        [pinball_structure.append_site(_) for _ in doped_pinball_sites]
+
+        [pinball_structure.append_kind(_) for _ in non_pinball_kinds]
+        [pinball_structure.append_site(_) for _ in non_pinball_sites]
+
+    pinball_structure.label = pinball_structure.get_formula(mode='count')
+
+    return dict(doped_structure=pinball_structure)
