@@ -541,6 +541,27 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.settings = res['settings'].get_dict()
 
             self.report(f'launching WorkChain from a previous trajectory <{self.ctx.previous_trajectory.pk}>')
+
+        elif self.inputs.get('thermalised_trajectory'):
+            self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
+            kwargs = {'trajectory': self.ctx.thermalised_trajectory,
+                      'parameters': get_or_create_input_node(orm.Dict,
+                          dict(step_index=-1,
+                               recenter=False,
+                               create_settings=True,
+                               complete_missing=True),
+                          store=True),
+                      'structure': self.ctx.inputs.structure,
+                      'metadata': {'call_link_label': 'get_structure'}}
+            if self.ctx.inputs.settings:
+                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.inputs.settings, store=True)
+
+            res = get_structure_from_trajectory(**kwargs)
+
+            self.ctx.inputs.structure = res['structure']
+            self.ctx.inputs.settings = res['settings'].get_dict()
+
+            self.report(f'launching WorkChain from a thermalised pinball trajectory <{self.ctx.thermalised_trajectory.pk}>')
         
         else:
             # start from scratch, eventually use `initial_velocities` if defined in input settings
