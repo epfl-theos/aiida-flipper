@@ -8,39 +8,9 @@ from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_flipper.calculations.functions.functions import get_diffusion_from_msd, get_structure_from_trajectory, concatenate_trajectory
-from aiida_flipper.utils.utils import get_or_create_input_node
+from aiida_flipper.utils.utils import get_or_create_input_node, get_total_trajectory
 
 ReplayMDWorkChain = WorkflowFactory('quantumespresso.flipper.replaymd')
-
-def get_total_trajectory(workchain, previous_trajectory=None, store=False):
-    """Collect all the trajectory segment and concatenate them."""
-    qb = orm.QueryBuilder()
-    qb.append(orm.WorkChainNode, filters={'uuid': workchain.uuid}, tag='replay')
-    # TODO: Are filters on the state of the calculation needed here?
-    # TODO: add project on extras.discard_trajectory, traj_d defined to skip them
-    qb.append(orm.CalcJobNode, with_incoming='replay',
-            edge_filters={'type': LinkType.CALL_CALC.value,
-                          'label': {'like': 'iteration_%'}},
-            edge_project='label', tag='calc', edge_tag='rc')
-    qb.append(orm.TrajectoryData, with_incoming='calc', edge_filters={'label': 'output_trajectory'},
-            project=['*'], tag='traj')
-    traj_d = {item['rc']['label'].replace('iteration_', 'trajectory_'): item['traj']['*'] for item in qb.iterdict()}  ## if not extras.discard_trajectory
-
-    # adding the trajectory of previous MD run, if it exists
-    if previous_trajectory:
-        traj_d.update({'trajectory_00': previous_trajectory})
-
-    # if I have produced several trajectories, I concatenate them here: (no need to sort them)
-    if (len(traj_d) > 1):
-        traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
-        traj_d.update({'remove_repeated_last_step': True})
-        res = concatenate_trajectory(**traj_d)
-        return res['concatenated_trajectory']
-    elif (len(traj_d) == 1):
-        # no reason to concatenate if I have only one trajectory (saves space in repository)
-        return list(traj_d.values())[0]
-    else:
-        return None
 
 def get_trajectories_dict(pk_list):
     """
