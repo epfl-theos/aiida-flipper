@@ -12,6 +12,36 @@ from aiida_flipper.utils.utils import get_or_create_input_node
 
 ReplayMDWorkChain = WorkflowFactory('quantumespresso.flipper.replaymd')
 
+def get_total_trajectory(workchain, previous_trajectory=None, store=False):
+    """Collect all the trajectory segment and concatenate them."""
+    qb = orm.QueryBuilder()
+    qb.append(orm.WorkChainNode, filters={'uuid': workchain.uuid}, tag='replay')
+    # TODO: Are filters on the state of the calculation needed here?
+    # TODO: add project on extras.discard_trajectory, traj_d defined to skip them
+    qb.append(orm.CalcJobNode, with_incoming='replay',
+            edge_filters={'type': LinkType.CALL_CALC.value,
+                          'label': {'like': 'iteration_%'}},
+            edge_project='label', tag='calc', edge_tag='rc')
+    qb.append(orm.TrajectoryData, with_incoming='calc', edge_filters={'label': 'output_trajectory'},
+            project=['*'], tag='traj')
+    traj_d = {item['rc']['label'].replace('iteration_', 'trajectory_'): item['traj']['*'] for item in qb.iterdict()}  ## if not extras.discard_trajectory
+
+    # adding the trajectory of previous MD run, if it exists
+    if previous_trajectory:
+        traj_d.update({'trajectory_00': previous_trajectory})
+
+    # if I have produced several trajectories, I concatenate them here: (no need to sort them)
+    if (len(traj_d) > 1):
+        traj_d['metadata'] = {'call_link_label': 'concatenate_trajectory', 'store_provenance': store}
+        traj_d.update({'remove_repeated_last_step': True})
+        res = concatenate_trajectory(**traj_d)
+        return res['concatenated_trajectory']
+    elif (len(traj_d) == 1):
+        # no reason to concatenate if I have only one trajectory (saves space in repository)
+        return list(traj_d.values())[0]
+    else:
+        return None
+
 def get_trajectories_dict(pk_list):
     """
     Returns a dictionary of the output trajectories with the calling ReplayMDWorkChain's label as the key.
@@ -183,8 +213,8 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         """Run the `ReplayMDWorkChain` to launch a `FlipperCalculation`."""
 
         inputs = self.ctx.replay_inputs
-        # if self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
-        inputs.pw['parent_folder'] = self.inputs.parent_folder
+        if self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
+            inputs.pw['parent_folder'] = self.inputs.parent_folder
 
         if (self.ctx.replay_counter == 0):
             # if this is first run, then I launch an unmodified ReplayMDWorkChain
@@ -192,16 +222,13 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         else:
             # for every run after the first one, the velocities and positions (which make the new structure) are read from the trajectory of previous MD run
-            # if trajectory and structure have different shapes (i.e. for pinball level 1 calculation only pinball positions are printed:)
-
-            # This input can only be used by the first MD run that I call.
-            try: inputs.pop('previous_trajectory', None)
-            except: pass
+            # if trajectory and structure have different shapes (i.e. for pinball level calculation only pinball positions are printed)
 
             workchain = self.ctx.workchains[-1]
-            create_missing = len(self.ctx.current_structure.sites) != workchain.outputs.total_trajectory.get_attribute('array|positions')[1]
+            last_trajectory = workchain.outputs.total_trajectory
+            create_missing = len(self.ctx.current_structure.sites) != last_trajectory.get_attribute('array|positions')[1]
             # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
-            kwargs = dict(trajectory=workchain.outputs.total_trajectory, 
+            kwargs = dict(trajectory=last_trajectory, 
                         parameters=get_or_create_input_node(orm.Dict, dict(
                             step_index=-1,
                             recenter=False,
@@ -217,6 +244,22 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             self.ctx.current_structure = res['structure']
             inputs.pw['parameters']['IONS'].update({'ion_velocities': 'from_input'})
             inputs.pw['settings'] = res['settings'].get_dict()
+
+            if not self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
+
+                if self.inputs.get('previous_trajectory'):
+                    previous_trajectory = inputs.pop('previous_trajectory', None)
+                    # Now I concatenate output trajectory of previous iteration to this iteration
+                    inputs['previous_trajectory'] = get_total_trajectory(workchain, previous_trajectory, store=True)
+                else:
+                    inputs['previous_trajectory'] = get_total_trajectory(workchain, store=True)
+
+            # previous_trajectory can only be used by the first MD run at pinball level
+            else:
+                # Since the each successive MD iteration at pinball level will use a different coefficient, I cannot
+                # concatenate these trajectories and I must remove them
+                try: inputs.pop('previous_trajectory', None)
+                except (KeyError, exceptions.NotExistent): pass
         
         # Set the `CALL` link label
         self.inputs.metadata.call_link_label = f'replay_{self.ctx.replay_counter:02d}'
@@ -243,7 +286,7 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         try:
             trajectory = workchain.outputs.total_trajectory
             # setting up the fitting window 
-            self.ctx.msd_parameters_d['t_end_fit_fs'] = round(trajectory.attributes['sim_time_fs'] * self.ctx.t_fit_fraction)
+            self.ctx.msd_parameters_d['t_end_fit_fs'] = round((trajectory.attributes['sim_time_fs'] - self.ctx.msd_parameters_d['equilibration_time_fs']) * self.ctx.t_fit_fraction, -1)
         except (KeyError, exceptions.NotExistent):
             self.report('the Md run with ReplayMDWorkChain did not generate output trajectory')
             
