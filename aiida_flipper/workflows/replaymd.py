@@ -399,11 +399,12 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.previous_trajectory = self.inputs.get('previous_trajectory')
             qb = orm.QueryBuilder()
             qb.append(orm.TrajectoryData, filters={'id':{'==':self.ctx.previous_trajectory.pk}}, tag='traj')
-            qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj')
+            qb.append(CalculationFactory('quantumespresso.flipper'), with_outgoing='traj', tag='flip')
+            qb.append(WorkflowFactory('quantumespresso.flipper.replaymd'), with_outgoing='flip')
             if qb.count():
-                cc, = qb.first()
-                param_d = cc.inputs['parameters'].get_dict()
-                struct = cc.inputs['structure']
+                wc, = qb.first()
+                param_d = wc.inputs.pw['parameters'].get_dict()
+                struct = wc.inputs.pw['structure']
                 if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
                 if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
                 if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')

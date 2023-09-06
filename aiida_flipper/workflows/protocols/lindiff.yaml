@@ -13,7 +13,7 @@ default_inputs:
         'nr_of_blocks' : 1
         't_start_fs' : 0
         't_start_fit_fs' : 2.5e+4 # 25 ps
-        't_end_fit_fs' : 5.e+5 # this is automated, so just a dummy input now
+        't_end_fit_fs' : 5.e+5 # this is automated, if `t_end_fit_fs_length` is provided, but still needed as a dummy input
         't_end_fit_fs_length' : 8.e+4 # (80ps) length by which t_end_fit_fs will be incremented
         't_fit_fraction' : 0.7 # fraction of output trajectory used for fitting
         'do_com' : False
