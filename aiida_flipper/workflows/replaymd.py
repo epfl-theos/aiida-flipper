@@ -16,7 +16,7 @@ CutoffsPseudoPotentialFamily = GroupFactory('pseudo.family.cutoffs')
 from aiida_quantumespresso.utils.defaults.calculation import pw as qe_defaults
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_flipper.utils.utils import get_or_create_input_node
-from aiida_flipper.calculations.functions.functions import get_structure_from_trajectory, concatenate_trajectory
+from aiida_flipper.calculations.functions.functions import get_structure_from_trajectory, concatenate_trajectory, get_last_step_from_trajectory
 
 PwCalculation = CalculationFactory('quantumespresso.pw')
 FlipperCalculation = CalculationFactory('quantumespresso.flipper')
@@ -121,7 +121,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         spec.expose_inputs(FlipperCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
-        spec.inputs['pw']['parent_folder'].required = True
+        spec.inputs['pw']['parent_folder'].required = False
         #spec.inputs.pop('pw.metadata.options.without_xml')
 
         # this stuff is not supported by pinball:
@@ -131,13 +131,17 @@ class ReplayMDWorkChain(PwBaseWorkChain):
 
         spec.input('nstep', valid_type=orm.Int, required=False,
             help='Number of MD steps (it will be read from the input parameters otherwise).')
+        spec.input('kpoints', valid_type=orm.KpointsData, required=False,
+            help='An explicit k-points list or mesh. Only this and not `kpoints_distance` has to be provided. Since flipper calculations can only run with gamma points.')
         #spec.input('is_hustler', valid_type=orm.Bool, required=False, default=lambda: orm.Bool(False))
         spec.input('total_energy_max_fluctuation', valid_type=orm.Float, required=False,
             help='The maximum total energy fluctuation allowed (eV). If the total energy has varied more than this '
                  'threshold, the workchain will fail.')
         spec.input('previous_trajectory', valid_type=orm.TrajectoryData, required=False,
             help='Trajectory of previous calculation, needed to pickup from last MD run (otherwise we do a normal start from flipper compatible structure).')
-
+        spec.input('thermalised_trajectory', valid_type=orm.TrajectoryData, required=False,
+            help='Trajectory of a pinball MD run, it will be used as a thermalisation step, but will not be concatanated to the AIMD trajectory because pinball trajectory does not have host lattice motion, it is strongly recommended to start an AIMD run with this trajectory.')
+            
         spec.outline(
             cls.setup,
             cls.validate_parameters,
@@ -215,6 +219,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         nstep=None,
         total_energy_max_fluctuation=None,
         previous_trajectory=None,
+        thermalised_trajectory=None,
         protocol=None,
         overrides=None,
         electronic_type=ElectronicType.INSULATOR,
@@ -229,9 +234,13 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         :param code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
         :param parent_folder: the location of charge densities of host lattice
-        :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of configurations on which pinball/DFT forces will be evaluated
+        :param nstep: the number of MD steps to perform, which in case of hustler calculation means the number of
+            configurations on which pinball/DFT forces will be evaluated
         :param total_energy_max_fluctuation: If the total energy exceeeds this threshold I will stop the workchain
-        :param previous_trajectory: if provided I will start the calculation from the positions and velocities of that trajectory
+        :param previous_trajectory: if provided I will start the calculation from the positions and velocities of 
+            that trajectory
+        :param thermalised_trajectory: if provided I will start the AIMD calculation from the positions and velocities 
+            of this trajectory, but will not concatanate this trajectory to the AIMD trajectory
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
         :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
@@ -317,7 +326,8 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 kpoints.set_kpoints_mesh([1,1,1])
                 builder.kpoints = kpoints
             else: 
-                raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
+                # raise NotImplementedError('Only gamma k-points possible in flipper calculations.')
+                builder.kpoints = inputs['kpoints']
 
         builder['pw']['parent_folder'] = parent_folder
         builder['nstep'] = orm.Int(inputs['nstep'])
@@ -326,6 +336,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         else: 
             builder['total_energy_max_fluctuation'] = orm.Float(0.5 * 1.e4 * natoms * meta_parameters['etot_conv_thr_per_atom'])
         if previous_trajectory: builder['previous_trajectory'] = previous_trajectory
+        if thermalised_trajectory: builder['thermalised_trajectory'] = thermalised_trajectory
         # pylint: enable=no-member
         return builder
 
@@ -420,12 +431,14 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             # mdsteps_todo will be -ve in that case and the replaymdwc will not be launched
             self.ctx.mdsteps_done += nsteps_of_previous_trajectory
 
-            # if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
-            #     try:
-            #         if self.ctx.previous_trajectory.get_array('steps').size > 1:
-            #             raise Exception(f'The trajectory <{self.ctx.previous_trajectory.id}> provided for thermalisation is too long')
-            #     except (KeyError, exceptions.NotExistent):
-            #         raise RuntimeError('No trajectory found for thermalisation, aborting now')
+        # If I run an AIMD, I check for a thermalised trajectory first, then for a previous trajectory
+        if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
+            if self.inputs.get('thermalised_trajectory'):
+                self.ctx.thermalised_trajectory = get_last_step_from_trajectory(self.inputs.get('thermalised_trajectory'))['last_step_trajectory']
+                if self.ctx.thermalised_trajectory.get_array('steps').size > 1:
+                    raise Exception(f'The trajectory <{self.ctx.thermalised_trajectory.id}> provided for thermalisation is too long')
+            elif not self.inputs.get('previous_trajectory'):
+                raise RuntimeError('No trajectory found for thermalisation nor a previous ab initio trajectory found for continuing, aborting now')
 
 #    def validate_kpoints(self):
 #        """Validate the inputs related to k-points.
@@ -486,11 +499,11 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             # NOTE (TODO): if we are retrying a calculation identical to the prev one (e.g. after an unhandled failure),
             #              there is no need to extract the structure & velocities again
             try:
-                prev_trajectory = self.ctx.restart_calc.outputs.output_trajectory
+                previous_trajectory = self.ctx.restart_calc.outputs.output_trajectory
             except (KeyError, exceptions.NotExistent):
                 raise RuntimeError('Previous trajectory not found!')
             self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
-            kwargs = {'trajectory': prev_trajectory,
+            kwargs = {'trajectory': previous_trajectory,
                       'parameters': get_or_create_input_node(orm.Dict,
                           dict(step_index=-1,
                                recenter=False,
@@ -507,6 +520,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
             self.ctx.inputs.structure = res['structure']
             self.ctx.inputs.settings = res['settings'].get_dict()
             #self.ctx.inputs.parameters['CONTROL']['restart_mode'] = 'restart'  ## NOT NEEDED IN PINBALL
+            
         elif self.inputs.get('previous_trajectory'):
             self.ctx.inputs.parameters['IONS']['ion_velocities'] = 'from_input'
             kwargs = {'trajectory': self.ctx.previous_trajectory,
@@ -546,9 +560,6 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.has_initial_velocities = False
 
         ## if this is not flipper MD
-        #if not input_dict['CONTROL'].get('lflipper', False):
-        #    input_dict['IONS']['wfc_extrapolation'] = 'second_order'
-        #    input_dict['IONS']['pot_extrapolation'] = 'second_order'
 
         ## HUSTLER STUFF (not implemented)
         if self.inputs.get('is_hustler', False):
