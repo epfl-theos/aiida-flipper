@@ -107,32 +107,37 @@ def get_diffusion_from_msd(structure, parameters, trajectory):
     dynanalyzer.set_trajectories(trajectory)
     decomposed = parameters_d.pop('decomposed')
 
-    # calculating slope of MSD(timelag) for different fitting lengths to check if it converged
-    t_end_fit_list = np.arange(parameters_d['t_end_fit_fs_length'], parameters_d['t_end_fit_fs'], parameters_d['t_end_fit_fs_length'])
-    parameters_d.pop('t_end_fit_fs_length')
-    slope_msd_list, diffusion_list = [], []
+        # calculating slope of MSD(timelag) for different fitting lengths to check if it converged
+    t_end_fit_fs_length = parameters_d.pop('t_end_fit_fs_length')
 
-    for t_end_fit in t_end_fit_list:
-        parameters_d['t_end_fit_fs'] = t_end_fit
+    if t_end_fit_fs_length > 1:
+        t_end_fit_list = np.arange(t_end_fit_fs_length, parameters_d['t_end_fit_fs'], t_end_fit_fs_length)
+        slope_msd_list, diffusion_list = [], []
+
+        for t_end_fit in t_end_fit_list:
+            parameters_d['t_end_fit_fs'] = t_end_fit
+            msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, decomposed=decomposed, **parameters_d)
+            # I only care about Li now
+            slope_msd_list.append(msd_iso.get_attr('Li')['slope_msd_mean'])
+            diffusion_list.append(msd_iso.get_attr('Li')['diffusion_mean_cm2_s'])
+
+        slope_std = np.std(slope_msd_list[-3:], axis=0)
+        slope_sem = slope_std/np.sqrt(3-1)
+        diff_std = np.std(diffusion_list[-3:], axis=0)
+        diff_sem = diff_std/np.sqrt(3-1)
+
+        atomic_species_dict_tmp = msd_iso.get_attr(atomic_species)
+        atomic_species_dict_tmp.update({'slope_msd_std': slope_std, 'slope_msd_sem': slope_sem, 'diffusion_std_cm2_s': diff_std, 'diffusion_sem_cm2_s': diff_sem, })
+        msd_iso.set_attr(atomic_species, atomic_species_dict_tmp)
+
+    else:
         msd_iso = dynanalyzer.get_msd(species_of_interest=species_of_interest, decomposed=decomposed, **parameters_d)
-        # I only care about Li now
-        slope_msd_list.append(msd_iso.get_attr('Li')['slope_msd_mean'])
-        diffusion_list.append(msd_iso.get_attr('Li')['diffusion_mean_cm2_s'])
 
     if parameters_d['nr_of_blocks']==1:
         # setting up std values for sem in case only 1 block is used, so that we don't have nan values that can't be stored in aiida database, we use std values instead of 0 to be consistent with output format
         for atomic_species in species_of_interest:
             msd_iso.set_array('msd_{}_{}_sem'.format('decomposed' if decomposed else 'isotropic', atomic_species), msd_iso.get_array('msd_{}_{}_std'.format('decomposed' if decomposed else 'isotropic', atomic_species)))
-
-    slope_std = np.std(slope_msd_list[-3:], axis=0)
-    slope_sem = slope_std/np.sqrt(3-1)
-    diff_std = np.std(diffusion_list[-3:], axis=0)
-    diff_sem = diff_std/np.sqrt(3-1)
-
-    atomic_species_dict_tmp = msd_iso.get_attr(atomic_species)
-    atomic_species_dict_tmp.update({'slope_msd_std': slope_std, 'slope_msd_sem': slope_sem, 'diffusion_std_cm2_s': diff_std, 'diffusion_sem_cm2_s': diff_sem, })
-    msd_iso.set_attr(atomic_species, atomic_species_dict_tmp)
-
+            
     arr_data = orm.ArrayData()
     arr_data.label = '{}-MSD'.format(structure.label)
     # Following are the collection of trajectories, not sure why we need this
