@@ -560,6 +560,9 @@ class ReplayMDWorkChain(PwBaseWorkChain):
         self.ctx.has_initial_velocities = False
 
         ## if this is not flipper MD
+        if not self.ctx.inputs.parameters['CONTROL'].get('lflipper', False):
+           self.ctx.inputs.parameters['IONS']['wfc_extrapolation'] = 'second_order'
+           self.ctx.inputs.parameters['IONS']['pot_extrapolation'] = 'second_order'
 
         ## HUSTLER STUFF (not implemented)
         if self.inputs.get('is_hustler', False):
