@@ -102,7 +102,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
         spec.expose_inputs(HustlerCalculation, namespace='pw', exclude=('kpoints',))
 
         # the calculation namespace is still 'pw'
-        spec.inputs['pw']['parent_folder'].required = True
+        spec.inputs['pw']['parent_folder'].required = False
         #spec.inputs.pop('pw.metadata.options.without_xml')
 
         # this stuff is not supported by pinball:
@@ -112,6 +112,8 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
 
         spec.input('nstep', valid_type=orm.Int, required=False,
             help='Number of MD steps it will be read from the input parameters otherwise; these many snapshots will be extracted from input trajectory.')
+        spec.input('kpoints', valid_type=orm.KpointsData, required=False,
+            help='An explicit k-points list or mesh. Only this and not `kpoints_distance` has to be provided.')
         spec.input('hustler_snapshots', valid_type=orm.TrajectoryData, required=False,
             help='Trajectory containing the uncorrelated configurations to be used in hustler calculation.')
         spec.outline(
@@ -284,7 +286,7 @@ class ReplayMDHustlerWorkChain(PwBaseWorkChain):
                 kpoints.set_kpoints_mesh([1,1,1])
                 builder.kpoints = kpoints
             else: 
-                raise NotImplementedError('Only gamma k-points possible in hustler calculations.')
+                builder.kpoints = inputs['kpoints']
 
         builder['pw']['parent_folder'] = parent_folder
         if nstep: builder['nstep'] = nstep
