@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Common utilities."""
 from aiida import orm
+from aiida.common.links import LinkType
 
 def get_or_create_input_node(cls, value, store=True):
     """Return a `Node` of a given class and given value.
@@ -44,6 +45,9 @@ def get_or_create_input_node(cls, value, store=True):
 # This is NOT supposed to be a calcfunction
 def get_total_trajectory(workchain, previous_trajectory=None, store=False):
     """Collect all the trajectory segment and concatenate them."""
+
+    from aiida_flipper.calculations.functions.functions import concatenate_trajectory
+    
     qb = orm.QueryBuilder()
     qb.append(orm.WorkChainNode, filters={'uuid': workchain.uuid}, tag='replay')
     # TODO: Are filters on the state of the calculation needed here?
