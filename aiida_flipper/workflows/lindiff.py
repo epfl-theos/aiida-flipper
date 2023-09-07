@@ -196,17 +196,18 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
             workchain = self.ctx.workchains[-1]
             last_trajectory = workchain.outputs.total_trajectory
-            create_missing = len(self.ctx.current_structure.sites) != last_trajectory.get_attribute('array|positions')[1]
-            # create missing tells inline function to append additional sites from the structure that needs to be passed in such case
+            complete_missing = len(self.ctx.current_structure.sites) != last_trajectory.get_attribute('array|positions')[1]
+            # complete_missing tells inline function to append additional sites from the structure that needs to be passed in such case
             kwargs = dict(trajectory=last_trajectory, 
                         parameters=get_or_create_input_node(orm.Dict, dict(
                             step_index=-1,
                             recenter=False,
                             create_settings=True,
-                            complete_missing=create_missing), store=False),)
-            if create_missing:
+                            complete_missing=complete_missing), store=False),)
+            # Since following refer to context variables they can't directly be added to above dictionary
+            kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.replay_inputs.pw.settings, store=False)
+            if complete_missing: 
                 kwargs['structure'] = self.ctx.current_structure
-                kwargs['settings'] = get_or_create_input_node(orm.Dict, self.ctx.replay_inputs.pw.settings, store=False)
 
             res = get_structure_from_trajectory(**kwargs)
             
@@ -217,11 +218,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
             if not self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
 
-                if self.inputs.get('previous_trajectory'):
+                try:
                     previous_trajectory = inputs.pop('previous_trajectory', None)
                     # Now I concatenate output trajectory of previous iteration to this iteration
                     inputs['previous_trajectory'] = get_total_trajectory(workchain, previous_trajectory, store=True)
-                else:
+                except (KeyError, exceptions.NotExistent):
                     inputs['previous_trajectory'] = get_total_trajectory(workchain, store=True)
 
             # previous_trajectory can only be used by the first MD run at pinball level
