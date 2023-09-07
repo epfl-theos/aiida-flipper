@@ -2,7 +2,6 @@
 """Workchain to run hustler level MD calculations using Pinball pw.x. based on Quantum ESPRESSO"""
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
-from aiida.common.links import LinkType
 from aiida.engine import ToContext, append_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
 from aiida.plugins import CalculationFactory, GroupFactory, WorkflowFactory
 

@@ -2,7 +2,6 @@
 """Workchain to run MD calculations using Pinball pw.x. based on Quantum ESPRESSO"""
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
-from aiida.common.links import LinkType
 from aiida.engine import ToContext, if_, while_, BaseRestartWorkChain, process_handler, ProcessHandlerReport, ExitCode
 from aiida.plugins import CalculationFactory, GroupFactory, WorkflowFactory
 
@@ -375,9 +374,13 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 wc, = qb.first()
                 param_d = wc.inputs.pw['parameters'].get_dict()
                 struct = wc.inputs.pw['structure']
-                if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
-                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
-                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
+                if struct.pk != self.ctx.inputs.structure.pk: 
+                    if struct.get_formula() != self.ctx.inputs.struture.get_formula():
+                        raise Exception(f'Structure <{struct.pk}> of previous trajectory <{self.ctx.previous_trajectory.pk}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory.')
+                if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: 
+                    raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
+                if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: 
+                    raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
             else:
                 self.report('WorkChain of previous trajectory not found, trying preceding concatenating calcfunction')
                 qb = orm.QueryBuilder()
@@ -389,9 +392,13 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                     wc, = qb.first()
                     param_d = wc.inputs['pw']['parameters'].get_dict()
                     struct = wc.inputs['pw']['structure']
-                    if struct.pk != self.ctx.inputs.structure.pk: raise Exception('Structure of previous trajectory not matching with input structure, please provide right trajectory.')
-                    if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
-                    if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
+                    if struct.pk != self.ctx.inputs.structure.pk: 
+                        if struct.get_formula() != self.ctx.inputs.struture.get_formula():
+                            raise Exception(f'Structure <{struct.pk}> of previous trajectory <{self.ctx.previous_trajectory.pk}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory.')
+                    if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: 
+                        raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
+                    if param_d['CONTROL']['dt'] != self.ctx.inputs.parameters['CONTROL']['dt']: 
+                        raise Exception('dt of previous trajectory not matching with input dt, please provide right trajectory.')
                 else:
                     self.report('Calcfunction associated with previous trajectory not found; continuing nonetheless')     
                    
