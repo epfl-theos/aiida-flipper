@@ -214,27 +214,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
             inputs.pw['parameters']['IONS'].update({'ion_velocities': 'from_input'})
             inputs.pw['settings'] = res['settings'].get_dict()
 
-            # if not self.ctx.replay_inputs.pw.parameters['CONTROL'].get('lflipper', False):
-
-            #     try:
-            #         previous_trajectory = inputs.pop('previous_trajectory', None)
-            #         # Now I concatenate output trajectory of previous iteration to this iteration
-            #         inputs['previous_trajectory'] = get_total_trajectory(workchain, previous_trajectory, store=True)
-            #     except (KeyError, exceptions.NotExistent):
-            #         inputs['previous_trajectory'] = get_total_trajectory(workchain, store=True)
-
-                # I increase the number of nsteps by appropriate amount only for aimd runs
-                # I need to do this whacky shenanigans otherwise nstep increases exponentially because changing
-                # nstep also changes the context variable 
-                # inputs.nstep = orm.Int(self.ctx.replay_inputs.nstep * (self.ctx.replay_counter + 1) / (self.ctx.replay_counter))
-
-                # I increase the number of nsteps by appropriate amount only for aimd runs
-                # I need to do this whacky shenanigans otherwise nstep increases exponentially because changing
-                # nstep also changes the context variable 
-                inputs.nstep = orm.Int(self.ctx.replay_inputs.nstep * (self.ctx.replay_counter + 1) / (self.ctx.replay_counter))
-
-            # previous_trajectory can only be used by the first MD run at pinball level
-            # else:
             # Since the each successive MD iteration will pick up from the previous iteration I need to pop out 
             # this `previous_trajectory` as it is only required at the first iteration.
             try: inputs.pop('previous_trajectory', None)
