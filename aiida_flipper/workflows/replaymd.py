@@ -375,7 +375,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                 param_d = wc.inputs.pw['parameters'].get_dict()
                 struct = wc.inputs.pw['structure']
                 if struct.pk != self.ctx.inputs.structure.pk: 
-                    if struct.get_formula() != self.ctx.inputs.struture.get_formula():
+                    if struct.get_formula() != self.ctx.inputs.structure.get_formula():
                         raise Exception(f'Structure <{struct.pk}> of previous trajectory <{self.ctx.previous_trajectory.pk}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory.')
                 if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: 
                     raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')
@@ -393,7 +393,7 @@ class ReplayMDWorkChain(PwBaseWorkChain):
                     param_d = wc.inputs['pw']['parameters'].get_dict()
                     struct = wc.inputs['pw']['structure']
                     if struct.pk != self.ctx.inputs.structure.pk: 
-                        if struct.get_formula() != self.ctx.inputs.struture.get_formula():
+                        if struct.get_formula() != self.ctx.inputs.structure.get_formula():
                             raise Exception(f'Structure <{struct.pk}> of previous trajectory <{self.ctx.previous_trajectory.pk}> not matching with input structure <{self.ctx.inputs.structure.pk}>, please provide right trajectory.')
                     if param_d['CONTROL']['iprint'] != self.ctx.inputs.parameters['CONTROL']['iprint']: 
                         raise Exception('iprint of previous trajectory not matching with input irpint, please provide right trajectory.')

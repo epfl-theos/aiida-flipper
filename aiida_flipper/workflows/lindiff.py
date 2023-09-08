@@ -166,8 +166,6 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
         builder.msd_parameters = orm.Dict(dict=inputs['msd_parameters'])
         if coefficients: builder.coefficients = coefficients
 
-        # builder.msd_parameters['t_end_fit_fs'] = builder.md['nstep'].value * 0.7 * builder.md['pw']['parameters']['CONTROL']['dt'] * 4.8378 * 10**-2
-
         return builder
 
     def should_run_process(self):
@@ -224,6 +222,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
                     inputs['previous_trajectory'] = get_total_trajectory(workchain, previous_trajectory, store=True)
                 except (KeyError, exceptions.NotExistent):
                     inputs['previous_trajectory'] = get_total_trajectory(workchain, store=True)
+
+                # I increase the number of nsteps by appropriate amount only for aimd runs
+                # I need to do this whacky shenanigans otherwise nstep increases exponentially because changing
+                # nstep also changes the context variable 
+                inputs.nstep = orm.Int(self.ctx.replay_inputs.nstep * (self.ctx.replay_counter + 1) / (self.ctx.replay_counter))
 
             # previous_trajectory can only be used by the first MD run at pinball level
             else:
