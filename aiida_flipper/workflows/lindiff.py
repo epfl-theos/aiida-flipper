@@ -228,6 +228,11 @@ class LinDiffusionWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 # nstep also changes the context variable 
                 # inputs.nstep = orm.Int(self.ctx.replay_inputs.nstep * (self.ctx.replay_counter + 1) / (self.ctx.replay_counter))
 
+                # I increase the number of nsteps by appropriate amount only for aimd runs
+                # I need to do this whacky shenanigans otherwise nstep increases exponentially because changing
+                # nstep also changes the context variable 
+                inputs.nstep = orm.Int(self.ctx.replay_inputs.nstep * (self.ctx.replay_counter + 1) / (self.ctx.replay_counter))
+
             # previous_trajectory can only be used by the first MD run at pinball level
             # else:
             # Since the each successive MD iteration will pick up from the previous iteration I need to pop out 
